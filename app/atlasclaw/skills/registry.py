@@ -531,6 +531,7 @@ single MD Skill.
         for tool_id in sorted(ids):
             tool_name = str(metadata.get(f"tool_{tool_id}_name", "")).strip()
             entrypoint = str(metadata.get(f"tool_{tool_id}_entrypoint", "")).strip()
+            tool_description = str(metadata.get(f"tool_{tool_id}_description", "")).strip()
             if not tool_name or not entrypoint:
                 logger.warning(
                     "Skipping md tool declaration for skill %s: incomplete pair for id '%s'",
@@ -541,6 +542,7 @@ single MD Skill.
             self._register_md_tool_entry(
                 tool_name=tool_name,
                 entrypoint=entrypoint,
+                tool_description=tool_description,
                 entry=entry,
                 skill_dir=skill_dir,
                 registered=registered,
@@ -554,6 +556,7 @@ single MD Skill.
         *,
         tool_name: str,
         entrypoint: str,
+        tool_description: str = "",
         entry: MdSkillEntry,
         skill_dir: Path,
         registered: set[str],
@@ -581,9 +584,12 @@ single MD Skill.
             )
             return
 
+        # Use tool_description if provided, otherwise fall back to entry description
+        description = tool_description if tool_description else entry.description
+        
         meta = SkillMetadata(
             name=tool_name,
-            description=entry.description,
+            description=description,
             category=str(entry.metadata.get("category", "skill")),
             location=entry.location,
             provider_type=(str(entry.metadata.get("provider_type", "")).strip() or entry.provider or None),
@@ -610,6 +616,11 @@ single MD Skill.
             inserted = True
 
         try:
+            # If attr_name is the default "handler", assume it's a script wrapper case
+            # Don't try to load the module, just create a wrapper
+            if attr_name == "handler":
+                return SkillRegistry._create_script_wrapper(py_file)
+            
             module_hash = hashlib.sha1(str(py_file).encode("utf-8")).hexdigest()[:12]
             module_name = f"atlasclaw_md_skill_{module_hash}_{py_file.stem}"
             spec = importlib.util.spec_from_file_location(module_name, py_file)
@@ -620,15 +631,109 @@ single MD Skill.
             spec.loader.exec_module(module)
 
             handler = getattr(module, attr_name, None)
-            if handler is None or not callable(handler):
-                raise AttributeError(f"Callable '{attr_name}' not found in {py_file}")
-            return handler
+            if handler is not None and callable(handler):
+                return handler
+            
+            # If no callable found, create a script wrapper
+            return SkillRegistry._create_script_wrapper(py_file)
         finally:
             if inserted:
                 try:
                     sys.path.remove(scripts_dir)
                 except ValueError:
                     pass
+    
+    @staticmethod
+    def _create_script_wrapper(py_file: Path) -> Callable:
+        """Create a wrapper function that executes a script file.
+        
+        This allows any script (Python, Bash, etc.) to be used as a skill tool.
+        The script will be executed with environment variables from the selected
+        provider instance if available.
+        """
+        import subprocess
+        import sys
+        import os
+        
+        async def script_handler(ctx=None, **kwargs) -> dict:
+            """Execute the script and return results.
+            
+            Args:
+                ctx: Optional RunContext (passed by pydantic-ai)
+                **kwargs: Additional arguments
+            """
+            # Build environment variables
+            env = os.environ.copy()
+            
+            # Inject provider instance configuration from ctx.deps.extra if available
+            if ctx is not None and hasattr(ctx, 'deps') and hasattr(ctx.deps, 'extra'):
+                extra = ctx.deps.extra
+                # Check for selected provider instance
+                provider_instance = extra.get('provider_instance')
+                if provider_instance:
+                    # Inject all provider instance config as environment variables
+                    for key, value in provider_instance.items():
+                        if value is not None and key not in ('password', 'token', 'secret'):
+                            env[key.upper()] = str(value)
+                        elif value is not None and key in ('cookie',):
+                            # For cookie, set as-is
+                            env[key.upper()] = str(value)
+                # Also check provider_instances for default instance
+                elif 'provider_instances' in extra:
+                    provider_instances = extra['provider_instances']
+                    # Find first available provider instance
+                    for provider_type, instances in provider_instances.items():
+                        if instances:
+                            # Use the first/default instance
+                            default_instance = list(instances.values())[0]
+                            for key, value in default_instance.items():
+                                if value is not None and key not in ('password', 'token', 'secret'):
+                                    env[key.upper()] = str(value)
+                                elif value is not None and key in ('cookie',):
+                                    env[key.upper()] = str(value)
+                            break
+            
+            # Add any kwargs as environment variables
+            for key, value in kwargs.items():
+                if value is not None:
+                    env[key.upper()] = str(value)
+            
+            # Determine how to execute based on file extension
+            if py_file.suffix == '.py':
+                cmd = [sys.executable, str(py_file)]
+            elif py_file.suffix in ['.sh', '.bash']:
+                cmd = ['bash', str(py_file)]
+            elif py_file.suffix == '.ps1':
+                cmd = ['powershell', '-File', str(py_file)]
+            else:
+                # Try to execute directly
+                cmd = [str(py_file)]
+            
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=env,
+                    cwd=str(py_file.parent)
+                )
+                
+                output = result.stdout
+                if result.stderr:
+                    output += f"\n[STDERR] {result.stderr}"
+                
+                return {
+                    "success": result.returncode == 0,
+                    "returncode": result.returncode,
+                    "output": output
+                }
+            except subprocess.TimeoutExpired:
+                return {"success": False, "error": "Script execution timed out"}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+        
+        return script_handler
     @staticmethod
     def _should_override(existing_location: str, new_location: str) -> bool:
         """

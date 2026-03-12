@@ -21,6 +21,12 @@
         "api_version": "2",
         "default_project": "TEST"
       }
+    },
+    "smartcmp": {
+      "default": {
+        "cmp_url": "${SMARTCMP_URL}",
+        "cmp_cookie": "${SMARTCMP_COOKIE}"
+      }
     }
   },
   "webhook": {
