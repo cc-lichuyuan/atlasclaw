@@ -1,5 +1,5 @@
 {
-  "providers_root": "../atlasclaw-providers/providers",
+  "providers_root": "",
   "model": {
     "primary": "deepseek/deepseek-chat",
     "fallbacks": [],
@@ -24,8 +24,11 @@
     },
     "smartcmp": {
       "default": {
-        "cmp_url": "${SMARTCMP_URL}",
-        "cmp_cookie": "${SMARTCMP_COOKIE}"
+        "cmp_url": "${CMP_URL}",
+        "cmp_cookie": "${CMP_COOKIE}",
+        "cmp_username": "${CMP_USERNAME}",
+        "cmp_password": "${CMP_PASSWORD}",
+        "cmp_auth_url": "${CMP_AUTH_URL}"
       }
     }
   },
