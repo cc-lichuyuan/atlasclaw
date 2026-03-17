@@ -166,7 +166,7 @@ class RetryConfig(BaseModel):
 class AgentDefaultsConfig(BaseModel):
     """Default agent configuration."""
     timeout_seconds: int = Field(default=600, ge=1, description="Execution timeout in seconds")
-    max_concurrent: int = Field(default=4, ge=1, description="Maximum concurrency")
+    max_concurrent: int = Field(default=10, ge=1, description="Maximum concurrency")
     max_tool_calls: int = Field(default=50, ge=1, description="Maximum tool calls per run")
     prompt_mode: PromptMode = PromptMode.FULL
     bootstrap_max_chars: int = Field(default=20000, description="Maximum Bootstrap file size in characters")

@@ -48,6 +48,9 @@
       "pkce_method": "S256"
     }
   },
+  "agent_defaults": {
+    "max_concurrent": 10
+  },
   "webhook": {
     "enabled": false,
     "header_name": "X-UniClaw-SK",

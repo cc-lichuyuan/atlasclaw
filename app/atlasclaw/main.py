@@ -169,7 +169,7 @@ async def lifespan(app: FastAPI):
         daily_reset_hour=config.reset.daily_hour,
         idle_reset_minutes=config.reset.idle_minutes,
     )
-    _session_queue = SessionQueue()
+    _session_queue = SessionQueue(max_concurrent=config.agent_defaults.max_concurrent)
     _skill_registry = SkillRegistry()
     
     _global_provider_registry = ServiceProviderRegistry()
