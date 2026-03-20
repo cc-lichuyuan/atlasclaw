@@ -321,12 +321,12 @@ async def _load_agent_config_from_db(session, agent_id: str):
     )
 
 
-async def _run_db_migrations():
+def _run_db_migrations():
     """Run database migrations on startup."""
     try:
         from alembic.config import Config
         from alembic import command
-        
+
         config = Config("alembic.ini")
         command.upgrade(config, "head")
         print("[AtlasClaw] Database migrations completed")
@@ -399,7 +399,7 @@ async def lifespan(app: FastAPI):
             print(f"[AtlasClaw] Database initialized: {db_config.db_type}")
             
             # Run migrations
-            await _run_db_migrations()
+            _run_db_migrations()
             db_initialized = True
         except Exception as e:
             print(f"[AtlasClaw] Warning: Failed to initialize database: {e}")
