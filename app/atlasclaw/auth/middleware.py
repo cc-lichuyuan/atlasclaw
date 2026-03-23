@@ -24,7 +24,7 @@ from app.atlasclaw.auth.strategy import AuthStrategy
 logger = logging.getLogger(__name__)
 
 # Paths that bypass authentication entirely
-_SKIP_PATHS = frozenset({"/health", "/ping", "/favicon.ico", "/docs", "/openapi.json"})
+_SKIP_PATHS = frozenset({"/api/health", "/ping", "/favicon.ico", "/docs", "/openapi.json"})
 
 # SSO paths — must not be intercepted by auth checks
 _SSO_PATHS = frozenset({"/api/auth/login", "/api/auth/callback", "/api/auth/logout", "/api/auth/me"})

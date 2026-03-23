@@ -1337,61 +1337,138 @@ curl http://localhost:8000/api/health
 
 ### 12.5 Docker Deployment
 
-**Dockerfile**:
+**Dockerfile** (`docker/Dockerfile`):
 ```dockerfile
 FROM python:3.11-slim
 
 WORKDIR /app
 
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first for better caching
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy application code
+COPY app/ ./app/
+COPY migrations/ ./migrations/
+COPY alembic.ini .
 
+# Create data directory
+RUN mkdir -p /app/data
+
+# Expose port
 EXPOSE 8000
 
-CMD ["uvicorn", "app.atlasclaw.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Health check (note: /api/health is the correct endpoint)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+# Run migrations and start server
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.atlasclaw.main:app --host 0.0.0.0 --port 8000"]
 ```
 
 ```bash
-# Build and run
-docker build -t atlasclaw-core .
+# Build from docker directory
+docker build -f docker/Dockerfile -t atlasclaw-core .
+
+# Run with config
 docker run -d \
   --name atlasclaw \
   -p 8000:8000 \
-  -v $(pwd)/atlasclaw.json:/app/atlasclaw.json \
-  -e DEEPSEEK_API_KEY=your-api-key \
+  -v $(pwd)/atlasclaw.json:/app/atlasclaw.json:ro \
+  -e ATLASCLAW_ENCRYPTION_KEY=your-key \
   atlasclaw-core
 ```
 
-**Docker Compose**:
+**Docker Compose** (see `docker/` directory for complete configurations):
+
+**SQLite mode** (`docker/docker-compose.sqlite.yml`):
 ```yaml
-# docker-compose.yml
 version: '3.8'
 
 services:
   atlasclaw:
-    build: .
-    container_name: atlasclaw-core
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     ports:
       - "8000:8000"
     environment:
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ATLASCLAW_ENCRYPTION_KEY=${ATLASCLAW_ENCRYPTION_KEY:-change-me-in-production}
     volumes:
-      - ./atlasclaw.json:/app/atlasclaw.json
-      - ./data:/app/data
+      - ../atlasclaw.json:/app/atlasclaw.json:ro
+      - atlasclaw-data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
-  nginx:
-    image: nginx:alpine
+volumes:
+  atlasclaw-data:
+```
+
+**MySQL mode** (`docker/docker-compose.yml`):
+```yaml
+version: '3.8'
+
+services:
+  atlasclaw:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
     ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf
+      - "8000:8000"
+    environment:
+      - ATLASCLAW_ENCRYPTION_KEY=${ATLASCLAW_ENCRYPTION_KEY:-change-me-in-production}
+      - DB_HOST=mysql
+      - DB_PORT=3306
+      - DB_NAME=atlasclaw
+      - DB_USER=${DB_USER:-atlasclaw}
+      - DB_PASSWORD=${DB_PASSWORD:-atlasclaw_secret}
     depends_on:
-      - atlasclaw
+      mysql:
+        condition: service_healthy
+    volumes:
+      - ../atlasclaw.json:/app/atlasclaw.json:ro
+      - atlasclaw-data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD:-root_secret}
+      - MYSQL_DATABASE=atlasclaw
+      - MYSQL_USER=${DB_USER:-atlasclaw}
+      - MYSQL_PASSWORD=${DB_PASSWORD:-atlasclaw_secret}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root_secret}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  mysql-data:
+  atlasclaw-data:
 ```
 
 ### 12.6 Database Migrations (MySQL Mode)
@@ -1514,6 +1591,18 @@ sudo systemctl start atlasclaw
 | `DEEPSEEK_API_KEY` | DeepSeek API key | Yes (if using DeepSeek) |
 | `ANTHROPIC_API_KEY` | Anthropic API key | Optional |
 | `OPENAI_API_KEY` | OpenAI API key | Optional |
+
+**Database Variables** (for Docker/MySQL deployments):
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ATLASCLAW_ENCRYPTION_KEY` | Encryption key for sensitive data | Required in Docker |
+| `DB_HOST` | Database host | `mysql` |
+| `DB_PORT` | Database port | `3306` |
+| `DB_NAME` | Database name | `atlasclaw` |
+| `DB_USER` | Database user | `atlasclaw` |
+| `DB_PASSWORD` | Database password | Required |
+| `MYSQL_ROOT_PASSWORD` | MySQL root password (compose only) | `root_secret` |
 
 **Security Variables**:
 
