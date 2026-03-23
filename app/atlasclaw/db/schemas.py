@@ -173,14 +173,16 @@ class UserBase(BaseModel):
     email: Optional[str] = Field(default=None, max_length=255, description="Email address")
     display_name: Optional[str] = Field(default=None, max_length=200, description="Display name")
     roles: Optional[Dict[str, Any]] = Field(default=None, description="User roles")
+    auth_type: str = Field(default="local", max_length=100, description="Auth type: local or oidc:{provider_id}")
     is_active: bool = Field(default=True, description="Whether user is active")
     is_admin: bool = Field(default=False, description="Whether user is admin")
+
 
 
 class UserCreate(UserBase):
     """Schema for creating a new User."""
 
-    password: Optional[str] = Field(default=None, min_length=8, description="Password (will be hashed)")
+    password: Optional[str] = Field(default=None, min_length=1, description="Password (will be hashed)")
 
 
 class UserUpdate(BaseModel):
@@ -188,10 +190,12 @@ class UserUpdate(BaseModel):
 
     email: Optional[str] = Field(default=None, max_length=255)
     display_name: Optional[str] = Field(default=None, max_length=200)
-    password: Optional[str] = Field(default=None, min_length=8, description="New password")
+    password: Optional[str] = Field(default=None, min_length=1, description="New password")
     roles: Optional[Dict[str, Any]] = None
+    auth_type: Optional[str] = Field(default=None, max_length=100)
     is_active: Optional[bool] = None
     is_admin: Optional[bool] = None
+
 
 
 class UserResponse(UserBase):

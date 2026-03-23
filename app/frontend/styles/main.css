@@ -113,6 +113,38 @@ body {
     font-weight: 600;
 }
 
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.logout-btn {
+    width: 36px;
+    height: 36px;
+    border: 1px solid #e1e1e1;
+    background: #fff;
+    color: #666;
+    border-radius: 8px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+}
+
+.logout-btn:hover {
+    color: #d9534f;
+    border-color: #f1c0be;
+    background: #fff5f5;
+}
+
+.logout-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+
 /* Language Switcher */
 .language-switcher {
     display: flex;

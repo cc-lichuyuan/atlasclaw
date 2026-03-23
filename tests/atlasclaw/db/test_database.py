@@ -384,7 +384,7 @@ class TestUserService:
         assert user.username == "testuser"
         assert user.email == "test@example.com"
         # Password should be hashed
-        assert user.password_hash != "secure_password_123"
+        assert user.password != "secure_password_123"
 
     @pytest.mark.asyncio
     async def test_password_hashing(self, session: AsyncSession):
@@ -398,9 +398,9 @@ class TestUserService:
         user = await UserService.create(session, data)
         
         # Verify correct password (verify_password takes password, hash)
-        assert verify_password("my_password", user.password_hash) is True
+        assert verify_password("my_password", user.password) is True
         # Verify wrong password
-        assert verify_password("wrong_password", user.password_hash) is False
+        assert verify_password("wrong_password", user.password) is False
 
     @pytest.mark.asyncio
     async def test_get_by_username(self, session: AsyncSession):
@@ -443,7 +443,7 @@ class TestUserService:
         assert updated is not None
         assert updated.display_name == "Updated Name"
         # Password should be updated
-        assert verify_password("newpass123", updated.password_hash) is True
+        assert verify_password("newpass123", updated.password) is True
 
     @pytest.mark.asyncio
     async def test_search_users(self, session: AsyncSession):

@@ -151,7 +151,7 @@ class TestDatabasePersistence:
             user_id = user.id
             
             # Verify hash is not plaintext
-            assert user.password_hash != password
+            assert user.password != password
         
         # Reopen and verify
         await db_manager.close()
@@ -163,9 +163,9 @@ class TestDatabasePersistence:
             assert user is not None
             
             # Verify correct password (verify_password is module-level function)
-            assert verify_password(password, user.password_hash) is True
+            assert verify_password(password, user.password) is True
             # Verify wrong password
-            assert verify_password("wrong_password", user.password_hash) is False
+            assert verify_password("wrong_password", user.password) is False
         
         await db_manager.close()
 

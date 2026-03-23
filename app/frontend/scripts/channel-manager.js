@@ -4,6 +4,9 @@
  */
 
 import { initI18n, t, updatePageTranslations } from './i18n.js';
+import { checkAuth, installAuthFetchInterceptor, logout } from './auth.js';
+
+
 
 // State
 let currentChannelType = null;
@@ -834,8 +837,15 @@ async function init() {
     console.log('[ChannelManager] Initializing...');
     
     try {
+        installAuthFetchInterceptor();
+        const authInfo = await checkAuth({ redirect: true });
+        if (!authInfo) {
+            return;
+        }
+
         // Initialize i18n
         await initI18n();
+
         updatePageTranslations();
         
         // Load channel types
@@ -845,6 +855,12 @@ async function init() {
         // Delete dialog buttons
         document.getElementById('btnCancelDelete')?.addEventListener('click', hideDeleteDialog);
         document.getElementById('btnConfirmDelete')?.addEventListener('click', handleDelete);
+
+        // Logout button
+        document.getElementById('logoutBtn')?.addEventListener('click', async () => {
+            await logout({ redirect: true });
+        });
+
         
         // Handle initial route (check URL params)
         await handleRouteChange();

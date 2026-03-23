@@ -29,20 +29,21 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
-def verify_password(password: str, password_hash: str) -> bool:
+def verify_password(password: str, password_digest: str) -> bool:
     """Verify a password against a hash.
 
     Args:
         password: Plain text password
-        password_hash: Hashed password
+        password_digest: Hashed password
 
     Returns:
         True if password matches
     """
     try:
-        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+        return bcrypt.checkpw(password.encode("utf-8"), password_digest.encode("utf-8"))
     except Exception:
         return False
+
 
 
 class UserService:
@@ -60,19 +61,21 @@ class UserService:
             Created User model
         """
         # Hash password if provided
-        password_hash = None
+        password = None
         if user_data.password:
-            password_hash = hash_password(user_data.password)
+            password = hash_password(user_data.password)
 
         user = UserModel(
             username=user_data.username,
             email=user_data.email,
-            password_hash=password_hash,
+            password=password,
+            auth_type=getattr(user_data, "auth_type", "local") or "local",
             display_name=user_data.display_name,
             roles=user_data.roles,
             is_active=user_data.is_active,
             is_admin=user_data.is_admin,
         )
+
         session.add(user)
         await session.flush()
         await session.refresh(user)
@@ -148,11 +151,12 @@ class UserService:
         if not user.is_active:
             return None
 
-        if user.password_hash is None:
+        if user.password is None:
             return None
 
-        if not verify_password(password, user.password_hash):
+        if not verify_password(password, user.password):
             return None
+
 
         # Update last login time
         user.last_login_at = datetime.utcnow()
@@ -230,9 +234,10 @@ class UserService:
 
         # Hash new password if provided
         if "password" in update_data and update_data["password"]:
-            update_data["password_hash"] = hash_password(update_data.pop("password"))
+            update_data["password"] = hash_password(update_data["password"])
         elif "password" in update_data:
             del update_data["password"]
+
 
         for key, value in update_data.items():
             setattr(user, key, value)
@@ -299,4 +304,6 @@ class UserService:
             "display_name": user.display_name,
             "roles": user.roles or {},
             "is_admin": user.is_admin,
+            "auth_type": user.auth_type,
         }
+

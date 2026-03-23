@@ -390,6 +390,8 @@ Implements the authentication pipeline: credential extraction → provider authe
 | `raw_token` | `str` | `""` | Original auth credential |
 | `provider_subject` | `str` | `""` | Composite key `"{provider}:{subject}"` |
 | `extra` | `dict[str, Any]` | `{}` | Extension context |
+| `auth_type` | `str` | `""` | Auth source type, e.g. `"local"`, `"oidc:keycloak"` |
+
 
 Properties: `is_anonymous: bool`, `is_default: bool`
 
@@ -412,8 +414,10 @@ Properties: `is_anonymous: bool`, `is_default: bool`
 | Field | Type | Description |
 |---|---|---|
 | `user_id` | `str` | Internal UUID |
-| `provider` | `str` | e.g. `"smartcmp"`, `"oidc"`, `"none"` |
+| `provider` | `str` | e.g. `"smartcmp"`, `"oidc"`, `"none"`, `"local"` |
 | `subject` | `str` | External subject ID |
+| `auth_type` | `str` | Auth source type, e.g. `"local"`, `"oidc:keycloak"` |
+
 | `display_name` | `str` | Human-readable name |
 | `tenant_id` | `str` | Tenant identifier |
 | `roles` | `list[str]` | Assigned roles |
@@ -433,7 +437,8 @@ Constructor: `strategy: AuthStrategy`, `anonymous_fallback: bool = False`, `oidc
 2. `Authorization: Bearer <token>` header
 3. `CloudChef-Authenticate` cookie
 
-**Skip Paths** (no auth required): `/health`, `/ping`, `/favicon.ico`, `/docs`, `/openapi.json`, `/static/`, `/styles/`, `/scripts/`, `/locales/`, `/config.json`, `/index.html`, `/api/auth/login`, `/api/auth/callback`, `/api/auth/logout`, `/api/auth/me`
+**Skip Paths** (no auth required): `/health`, `/ping`, `/favicon.ico`, `/docs`, `/openapi.json`, `/static/`, `/styles/`, `/scripts/`, `/locales/`, `/config.json`, `/index.html`, `/login.html`, `/api/auth/login`, `/api/auth/local/login`, `/api/auth/callback`, `/api/auth/logout`, `/api/auth/me`
+
 
 **Function**: `setup_auth_middleware(app, auth_config, shadow_store) -> None`
 
@@ -467,6 +472,8 @@ Constructor: `provider: AuthProvider`, `shadow_store: ShadowUserStore`, `cache_t
 | `OIDCProvider` | `oidc.py` | JWT validation via JWKS endpoint (RS256/RS384/RS512) | `issuer`, `client_id`, `jwks_uri`, `audience` |
 | `OIDCSSOProvider` | `oidc_sso.py` | Full OAuth2 OIDC with PKCE (S256) | Extends OIDCProvider + `client_secret`, `redirect_uri` |
 | `SmartCMPProvider` | `smartcmp.py` | CloudChef SmartCMP integration | HTTP-based validation |
+| `LocalAuthProvider` | `local.py` | Local username/password authentication (DB-backed) | `UserModel.password` (bcrypt) |
+
 
 ### 2.5 Shadow User Store (`auth/shadow_store.py`)
 

@@ -21,6 +21,11 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
+# Clear proxy settings for LLM API calls to avoid timeout issues
+import os
+for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
+    os.environ.pop(proxy_var, None)
+
 load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env", override=False)
 
 from fastapi import FastAPI
@@ -383,8 +388,46 @@ async def _load_agent_config_from_db(session, agent_id: str):
     )
 
 
+async def _ensure_default_local_admin(config) -> None:
+    """Ensure default local admin account exists when local auth is enabled."""
+    from app.atlasclaw.auth.config import AuthConfig
+    from app.atlasclaw.db.orm.user import UserService
+    from app.atlasclaw.db.schemas import UserCreate
+
+    if config.auth is None:
+        return
+
+    auth_cfg = config.auth if isinstance(config.auth, AuthConfig) else AuthConfig(**config.auth)
+    if auth_cfg.provider.lower() != "local" or not auth_cfg.local.enabled:
+        return
+
+    username = auth_cfg.local.default_admin_username or "admin"
+    password = auth_cfg.local.default_admin_password or "admin"
+
+    async with get_db_manager().get_session() as session:
+        existing = await UserService.get_by_username(session, username)
+        if existing:
+            return
+
+        await UserService.create(
+            session,
+            UserCreate(
+                username=username,
+                password=password,
+                display_name="Administrator",
+                roles={"admin": True},
+                auth_type="local",
+                is_admin=True,
+                is_active=True,
+            ),
+        )
+
+    print(f"[AtlasClaw] Created default local admin user: {username}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+
 
     """Application lifespan handler for startup and shutdown."""
     global _session_manager, _session_queue, _skill_registry, _agent_runner, _global_provider_registry, _channel_manager
@@ -462,8 +505,12 @@ async def lifespan(app: FastAPI):
             raise RuntimeError(f"Database startup failed: {e}") from e
 
     
+    if db_initialized:
+        await _ensure_default_local_admin(config)
+
     # Register built-in channel handlers (enterprise messaging platforms)
     ChannelRegistry.register("feishu", FeishuHandler)
+
     ChannelRegistry.register("dingtalk", DingTalkHandler)
     ChannelRegistry.register("wecom", WeComHandler)
     print(f"[AtlasClaw] Registered built-in channel handlers")
@@ -784,14 +831,24 @@ def create_app() -> FastAPI:
             if channels_path.exists():
                 return FileResponse(str(channels_path))
             return {"error": "Channels page not found"}
+
+        # Serve login page
+        @app.get("/login.html", include_in_schema=False)
+        async def serve_login():
+            login_path = frontend_dir / "login.html"
+            if login_path.exists():
+                return FileResponse(str(login_path))
+            return {"error": "Login page not found"}
         
         # Serve config.json
+
         @app.get("/config.json", include_in_schema=False)
         async def serve_config():
             config_path = frontend_dir / "config.json"
             if config_path.exists():
                 return FileResponse(str(config_path))
-            return {"apiBaseUrl": "http://127.0.0.1:8000"}
+            return {"apiBaseUrl": ""}
+
     
     # Include API routes
     api_router = create_router()
@@ -814,20 +871,14 @@ def create_app() -> FastAPI:
     # Use config from lifespan (already loaded with correct working directory)
     try:
         from app.atlasclaw.auth.middleware import setup_auth_middleware
-        from app.atlasclaw.core.config import ConfigManager
         from app.atlasclaw.auth.config import AuthConfig
+        from app.atlasclaw.core.config import get_config
 
-        # Load config explicitly from the correct path
-        config_path = Path(__file__).parent.parent.parent / "atlasclaw.json"
-        if config_path.exists():
-            _cfg_manager = ConfigManager(config_path=str(config_path))
-            _cfg = _cfg_manager.config
-        else:
-            # Fallback to default config loading
-            from app.atlasclaw.core.config import get_config
-            _cfg = get_config()
+        # Always use the active global config manager (supports ATLASCLAW_CONFIG in tests/runtime)
+        _cfg = get_config()
 
         _auth = _cfg.auth if _cfg else None
+
         if isinstance(_auth, dict):
             _auth = AuthConfig(**_auth)
         # Respect the enabled flag — disabled auth runs in anonymous mode

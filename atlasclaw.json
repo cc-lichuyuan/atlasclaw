@@ -82,15 +82,24 @@
     }
   },
   "auth": {
-    "enabled": false,
-    "provider": "oidc",
+    "enabled": true,
+    "provider": "local",
     "cache_ttl_seconds": 300,
+    "jwt": {
+      "header_name": "AtlasClaw-Authenticate",
+      "cookie_name": "AtlasClaw-Authenticate",
+      "issuer": "atlasclaw",
+      "secret_key": "${ATLASCLAW_JWT_SECRET}",
+      "expires_minutes": 480
+    },
     "oidc": {
       "issuer": "${OIDC_ISSUER}",
       "client_id": "${OIDC_CLIENT_ID}",
       "client_secret": "${OIDC_CLIENT_SECRET}",
       "jwks_uri": "${OIDC_ISSUER}/protocol/openid-connect/certs",
       "scopes": ["openid", "profile", "email"],
+      "ocbc_enabled": true,
+
       "authorization_endpoint": "${OIDC_ISSUER}/protocol/openid-connect/auth",
       "token_endpoint": "${OIDC_ISSUER}/protocol/openid-connect/token",
       "userinfo_endpoint": "${OIDC_ISSUER}/protocol/openid-connect/userinfo",

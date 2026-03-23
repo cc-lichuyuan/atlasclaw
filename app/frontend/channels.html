@@ -4,8 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title data-i18n="channel.title">Channel Management - AtlasClaw</title>
-    <link rel="stylesheet" href="/styles/main.css?v=9">
-    <script type="module" src="/scripts/channel-manager.js?v=9"></script>
+    <link rel="stylesheet" href="/styles/main.css?v=10">
+    <script type="module" src="/scripts/channel-manager.js?v=10"></script>
+
 </head>
 <body>
     <!-- Left Sidebar (same as index.html) -->
@@ -39,7 +40,19 @@
     <main class="main-content">
         <header class="chat-header">
             <h1 data-i18n="channel.title">Channel Management</h1>
+            <div class="header-actions">
+                <button id="logoutBtn" class="logout-btn" type="button" data-i18n-title="logout.title" data-i18n-aria-label="logout.title" title="Logout" aria-label="Logout">
+
+
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                        <polyline points="16 17 21 12 16 7"></polyline>
+                        <line x1="21" y1="12" x2="9" y2="12"></line>
+                    </svg>
+                </button>
+            </div>
         </header>
+
         
         <div class="channel-content">
             <!-- Channel List View (default) -->

@@ -183,9 +183,11 @@ app/atlasclaw/
 │       ├── base.py                # AuthProvider ABC
 │       ├── none.py                # NoneProvider (no auth)
 │       ├── api_key.py             # APIKeyProvider
+│       ├── local.py               # LocalAuthProvider (username/password)
 │       ├── oidc.py                # OIDCProvider (JWT/JWKS validation)
 │       ├── oidc_sso.py            # OIDCSSOProvider (full OAuth2 + PKCE)
 │       └── smartcmp.py            # SmartCMPProvider (CloudChef)
+
 ├── agent/
 │   ├── runner.py                  # AgentRunner (main execution loop)
 │   ├── stream.py                  # StreamEvent, StreamEventType

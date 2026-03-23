@@ -131,10 +131,12 @@ class UserModel(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True, index=True)
-    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    auth_type: Mapped[str] = mapped_column(String(100), nullable=False, default="local", index=True)
 
     # Roles and permissions
     roles: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSON, nullable=True)
+
 
     # Status
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
