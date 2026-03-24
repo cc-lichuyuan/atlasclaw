@@ -167,14 +167,15 @@ Create `/opt/atlasclaw/workspace/atlasclaw.json`:
     ]
   },
   "auth": {
-    "provider": "api_key",
-    "api_key": {
-      "keys": {
-        "sk-your-secret-key": {
-          "user_id": "admin",
-          "roles": ["admin"]
-        }
-      }
+    "provider": "local",
+    "local": {
+      "enabled": true,
+      "default_admin_username": "admin",
+      "default_admin_password": "admin"
+    },
+    "jwt": {
+      "secret_key": "atlasclaw-docker-secret-CHANGE-ME",
+      "expires_minutes": 480
     }
   }
 }
@@ -341,19 +342,20 @@ tar -czf atlasclaw-backup-$(date +%Y%m%d).tar.gz /opt/atlasclaw/data /opt/atlasc
 }
 ```
 
-### Authentication (API Key)
+### Authentication (Local Username/Password)
 
 ```json
 {
   "auth": {
-    "provider": "api_key",
-    "api_key": {
-      "keys": {
-        "sk-your-key": {
-          "user_id": "admin",
-          "roles": ["admin"]
-        }
-      }
+    "provider": "local",
+    "local": {
+      "enabled": true,
+      "default_admin_username": "admin",
+      "default_admin_password": "admin"
+    },
+    "jwt": {
+      "secret_key": "atlasclaw-docker-secret-CHANGE-ME",
+      "expires_minutes": 480
     }
   }
 }
