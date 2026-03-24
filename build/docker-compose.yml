@@ -6,6 +6,9 @@ services:
     container_name: atlasclaw
     ports:
       - "8000:8000"
+    environment:
+      - ATLASCLAW_CONFIG=/app/workspace/atlasclaw.json
+    working_dir: /app/workspace
     volumes:
       # Workspace: host /opt/atlasclaw/workspace -> container /app/workspace
       - /opt/atlasclaw/workspace:/app/workspace
