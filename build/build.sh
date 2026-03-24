@@ -1,9 +1,8 @@
 #!/bin/bash
 # AtlasClaw Build Script
-# Usage: ./build.sh --mode opensource|enterprise [--tag VERSION] [--repo REGISTRY]
+# Usage: ./build.sh --mode opensource|enterprise [--tag VERSION] [--push] [--username USER] [--password PASS]
 #
-# Note: Image push functionality will be added in future versions.
-#       The --repo parameter specifies the target registry for images.
+# Default registry: registry.cn-shanghai.aliyuncs.com/atlasclaw
 
 set -e
 
@@ -17,7 +16,12 @@ NC='\033[0m' # No Color
 # Default values
 MODE=""
 TAG="latest"
-REPO=""  # Docker registry repository (e.g., registry.example.com/atlasclaw)
+REGISTRY="registry.cn-shanghai.aliyuncs.com"
+NAMESPACE="atlasclaw"
+REPO=""  # Full repository path (e.g., registry.cn-shanghai.aliyuncs.com/atlasclaw)
+PUSH=false
+USERNAME=""
+PASSWORD=""
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BUILD_DIR="$SCRIPT_DIR"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -45,30 +49,39 @@ show_usage() {
 AtlasClaw Build Script
 
 Usage:
-    ./build.sh --mode opensource|enterprise [--tag VERSION] [--repo REGISTRY]
+    ./build.sh --mode opensource|enterprise [--tag VERSION] [--push] [--username USER] [--password PASS]
 
 Options:
     --mode          Build mode: opensource or enterprise
     --tag, -t       Image version tag (default: latest)
-    --repo, -r      Docker registry repository (e.g., registry.example.com/atlasclaw)
-                    If specified, images will be tagged for this registry.
+    --push          Push image to registry after build
+    --username      Registry username (required for push)
+    --password      Registry password (required for push)
+    --registry      Custom registry URL (default: registry.cn-shanghai.aliyuncs.com)
+    --namespace     Custom namespace (default: atlasclaw)
     --help, -h      Show this help message
 
 Examples:
+    # Build only
     ./build.sh --mode opensource
     ./build.sh --mode enterprise --tag v1.0.0
-    ./build.sh --mode opensource --tag latest --repo registry.example.com/atlasclaw
+
+    # Build and push to default registry (ACR Shanghai)
+    ./build.sh --mode opensource --push --username myuser --password mypass
+
+    # Build and push with custom tag
+    ./build.sh --mode enterprise --tag v2.0.0 --push --username myuser --password mypass
+
+    # Build and push to custom registry
+    ./build.sh --mode opensource --registry registry.example.com --namespace myns --push -u myuser -p mypass
 
 Modes:
     opensource  - Lightweight build with SQLite (single node)
     enterprise  - Full build with MySQL 8.5 (production)
 
 Registry:
-    When --repo is specified, images are tagged as:
-    - {repo}/atlasclaw:{tag}          (OpenSource edition)
-    - {repo}/atlasclaw-official:{tag} (Enterprise edition)
-
-    Note: Push functionality will be added in future versions.
+    Default: registry.cn-shanghai.aliyuncs.com/atlasclaw
+    Image format: {registry}/{namespace}/{image}:{tag}
 EOF
 }
 
@@ -83,7 +96,28 @@ while [[ $# -gt 0 ]]; do
             TAG="$2"
             shift 2
             ;;
+        --push)
+            PUSH=true
+            shift 1
+            ;;
+        --username|-u)
+            USERNAME="$2"
+            shift 2
+            ;;
+        --password|-p)
+            PASSWORD="$2"
+            shift 2
+            ;;
+        --registry)
+            REGISTRY="$2"
+            shift 2
+            ;;
+        --namespace)
+            NAMESPACE="$2"
+            shift 2
+            ;;
         --repo|-r)
+            # Deprecated: kept for backward compatibility
             REPO="$2"
             shift 2
             ;;
@@ -98,6 +132,15 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Validate push requirements
+if [[ "$PUSH" == true ]]; then
+    if [[ -z "$USERNAME" || -z "$PASSWORD" ]]; then
+        print_error "Push requires both --username and --password"
+        show_usage
+        exit 1
+    fi
+fi
 
 # Validate mode
 if [[ -z "$MODE" ]]; then
@@ -124,11 +167,15 @@ else
     DB_TYPE="mysql"
 fi
 
-# Add repo prefix if specified
+# Set repository path
 if [[ -n "$REPO" ]]; then
+    # Backward compatibility: use explicit repo if provided
     IMAGE_NAME="${REPO}/${BASE_IMAGE_NAME}"
+    FULL_REGISTRY_PATH="$REPO"
 else
-    IMAGE_NAME="$BASE_IMAGE_NAME"
+    # Use registry + namespace format
+    FULL_REGISTRY_PATH="${REGISTRY}/${NAMESPACE}"
+    IMAGE_NAME="${FULL_REGISTRY_PATH}/${BASE_IMAGE_NAME}"
 fi
 
 echo ""
@@ -321,7 +368,22 @@ fi
 
 echo ""
 
-# Step 6: Clean up build artifacts
+# Step 6: Push image to registry (if requested)
+if [[ "$PUSH" == true ]]; then
+    print_status "Logging into registry: $REGISTRY..."
+    echo "$PASSWORD" | docker login -u "$USERNAME" --password-stdin "$REGISTRY"
+    print_success "Logged in successfully"
+    echo ""
+
+    print_status "Pushing image to $FULL_REGISTRY_PATH..."
+    docker push "$IMAGE_NAME:$TAG"
+    docker push "$IMAGE_NAME:latest"
+    print_success "Image pushed successfully"
+    echo ""
+    print_status "Image location: $IMAGE_NAME:$TAG"
+fi
+
+# Step 7: Clean up build artifacts
 print_status "Cleaning up temporary files..."
 
 rm -rf "$BUILD_DIR/app"
@@ -342,20 +404,34 @@ echo -e "${GREEN}  Build Completed Successfully!${NC}"
 echo -e "${GREEN}========================================${NC}"
 echo ""
 echo "Build Mode:     $MODE"
+echo "Registry:       $FULL_REGISTRY_PATH"
 echo "Image:          $IMAGE_NAME:$TAG"
+echo "Pushed:         $PUSH"
 echo "Configuration:  $BUILD_DIR/config/atlasclaw.json"
 echo "Compose File:   $BUILD_DIR/$COMPOSE_FILE"
 if [[ "$MODE" == "enterprise" ]]; then
     echo "Secrets:        $BUILD_DIR/secrets/"
 fi
 echo ""
-echo "Next steps:"
-echo "  1. Edit $BUILD_DIR/config/atlasclaw.json to add your LLM API key"
-if [[ "$MODE" == "enterprise" ]]; then
-    echo "  2. Review MySQL passwords in $BUILD_DIR/secrets/"
-fi
-echo "  2. Run: cd $BUILD_DIR && docker-compose up -d"
-if [[ "$MODE" == "enterprise" ]]; then
-    echo "  3. Run: docker-compose exec atlasclaw alembic upgrade head"
+
+if [[ "$PUSH" == true ]]; then
+    echo "Image has been pushed to: $IMAGE_NAME:$TAG"
+    echo ""
+    echo "To pull and run:"
+    echo "  docker pull $IMAGE_NAME:$TAG"
+    echo "  cd $BUILD_DIR && docker-compose up -d"
+else
+    echo "Next steps:"
+    echo "  1. Edit $BUILD_DIR/config/atlasclaw.json to add your LLM API key"
+    if [[ "$MODE" == "enterprise" ]]; then
+        echo "  2. Review MySQL passwords in $BUILD_DIR/secrets/"
+    fi
+    echo "  2. Run: cd $BUILD_DIR && docker-compose up -d"
+    if [[ "$MODE" == "enterprise" ]]; then
+        echo "  3. Run: docker-compose exec atlasclaw alembic upgrade head"
+    fi
+    echo ""
+    echo "To push to registry:"
+    echo "  ./build.sh --mode $MODE --tag $TAG --push --username <user> --password <pass>"
 fi
 echo ""
