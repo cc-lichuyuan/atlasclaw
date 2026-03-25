@@ -301,6 +301,21 @@ def _is_admin_from_roles(roles: list[str]) -> bool:
     return any(str(role).lower() == "admin" for role in roles)
 
 
+def _resolve_workspace_path(request: Request, ctx: Optional[APIContext] = None) -> str:
+    config = getattr(request.app.state, "config", None)
+    workspace = getattr(config, "workspace", None) if config is not None else None
+    configured_path = getattr(workspace, "path", None) if workspace is not None else None
+    if configured_path:
+        return str(Path(configured_path).resolve())
+
+    resolved_ctx = ctx or get_api_context()
+    session_workspace = getattr(resolved_ctx.session_manager, "workspace_path", None)
+    if session_workspace:
+        return str(Path(session_workspace).resolve())
+
+    return str(Path(".").resolve())
+
+
 def _build_scoped_deps(
     ctx: APIContext,
     user_info: UserInfo,
@@ -1057,7 +1072,7 @@ def create_router() -> APIRouter:
         )
         session_key_str = key.to_string(scope=SessionScope.MAIN)
         session = await ctx.session_manager.get_or_create(session_key_str)
-        workspace_path = str(Path(request.app.state.config.workspace.path).resolve())
+        workspace_path = _resolve_workspace_path(request, ctx=ctx)
         UserWorkspaceInitializer(workspace_path, auth_result.subject).initialize()
 
         roles = auth_result.roles if isinstance(auth_result.roles, list) else []
@@ -1312,7 +1327,7 @@ def create_router() -> APIRouter:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail=f"SSO authentication failed: {exc}"
             )
-        workspace_path = str(Path(request.app.state.config.workspace.path).resolve())
+        workspace_path = _resolve_workspace_path(request)
         shadow_store = ShadowUserStore(workspace_path=workspace_path)
         shadow_user = await shadow_store.get_or_create(
             provider=auth_config.provider.lower(),

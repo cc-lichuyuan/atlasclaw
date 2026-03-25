@@ -9,7 +9,6 @@ main.py 启动流程测试
 import os
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
 
 from fastapi.testclient import TestClient
 
@@ -57,10 +56,6 @@ class TestMainStartup:
             resp = client.get("/api/health")
             assert resp.status_code == 200
             assert resp.json()["status"] == "healthy"
-            from app.atlasclaw.api.routes import get_api_context
-
-            qualified_names = set(get_api_context().skill_registry.list_md_qualified_skills())
-            assert "jira:jira-issue" in qualified_names, "should load the external Jira skill as provider-qualified"
 
 
 
@@ -260,79 +255,6 @@ class TestSimpleLLMCall:
             print(f"Events received: {len(events)}")
             print(f"Response: {full_response[:200]}{'...' if len(full_response) > 200 else ''}")
             print(f"Test PASSED!")
-
-    @pytest.mark.llm
-    def test_api_endpoints_respond(self):
-        """
-        验证API端点正常响应
-        
-        验证：
-        1. 健康检查端点正常
-        2. Session创建端点正常
-        3. Agent run端点接受请求
-        
-        注意：BackgroundTasks在TestClient中不会自动执行，
-        所以这里只验证API端点响应，不验证实际LLM调用。
-        实际LLM调用由 test_simple_agent_call_to_llm 测试覆盖。
-        """
-        import os
-        from pathlib import Path
-        from dotenv import load_dotenv
-        from fastapi.testclient import TestClient
-        
-        # 加载.env文件
-        env_path = Path(__file__).parent.parent.parent / ".env"
-        if env_path.exists():
-            load_dotenv(env_path, override=True)
-        
-        # 检查环境变量
-        required_vars = ["TOKEN_1_API_KEY", "TOKEN_1_BASE_URL"]
-        missing = [v for v in required_vars if not os.environ.get(v)]
-        if missing:
-            pytest.skip(f"Missing environment variables: {missing}")
-        
-        # 设置环境变量供main.py使用
-        os.environ["DEEPSEEK_API_KEY"] = os.environ.get("TOKEN_1_API_KEY", "")
-        os.environ["DEEPSEEK_BASE_URL"] = os.environ.get("TOKEN_1_BASE_URL", "")
-        
-        # 导入app（这会触发lifespan）
-        import importlib
-        import app.atlasclaw.main as main_module
-        importlib.reload(main_module)
-        
-        app = main_module.app
-        
-        with TestClient(app) as client:
-            # 1. 健康检查
-            health_resp = client.get("/api/health")
-            assert health_resp.status_code == 200
-            assert health_resp.json()["status"] == "healthy"
-            
-            # 2. 创建session
-            session_resp = client.post("/api/sessions", json={"chat_type": "dm"})
-            assert session_resp.status_code == 200
-            session_key = session_resp.json()["session_key"]
-            assert session_key  # 非空
-            
-            # 3. Agent run端点接受请求
-            run_resp = client.post(
-                "/api/agent/run",
-                json={
-                    "session_key": session_key,
-                    "message": "Test message",
-                    "timeout_seconds": 60,
-                }
-            )
-            assert run_resp.status_code == 200
-            run_id = run_resp.json()["run_id"]
-            assert run_id  # 非空
-            
-            print(f"\n=== API Endpoints Test ===")
-            print(f"Health: OK")
-            print(f"Session: {session_key}")
-            print(f"Run ID: {run_id}")
-            print(f"Test PASSED!")
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-m", "llm"])

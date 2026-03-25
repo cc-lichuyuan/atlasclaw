@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel
 
 _ENV_RE = re.compile(r'\$\{([^}]+)\}')
+DEFAULT_JWT_SECRET = "atlasclaw-dev-secret"
 
 
 def expand_env(value: str) -> str:
@@ -100,15 +101,24 @@ class JWTAuthConfig(BaseModel):
     header_name: str = "AtlasClaw-Authenticate"
     cookie_name: str = "AtlasClaw-Authenticate"
     issuer: str = "atlasclaw"
-    secret_key: str = "atlasclaw-dev-secret"
+    secret_key: str = DEFAULT_JWT_SECRET
     expires_minutes: int = 480
+
+    def _resolve_secret_key(self) -> str:
+        expanded_secret = expand_env(self.secret_key).strip()
+        if expanded_secret and not _ENV_RE.fullmatch(expanded_secret):
+            return expanded_secret
+        env_secret = os.environ.get("ATLASCLAW_JWT_SECRET", "").strip()
+        if env_secret:
+            return env_secret
+        return DEFAULT_JWT_SECRET
 
     def expanded(self) -> "JWTAuthConfig":
         return JWTAuthConfig(
             header_name=expand_env(self.header_name),
             cookie_name=expand_env(self.cookie_name),
             issuer=expand_env(self.issuer),
-            secret_key=expand_env(self.secret_key),
+            secret_key=self._resolve_secret_key(),
             expires_minutes=self.expires_minutes,
         )
 
@@ -164,10 +174,5 @@ class AuthConfig(BaseModel):
                     "auth.dingtalk.app_secret is required when auth.provider='dingtalk'"
                 )
 
-        jwt_cfg = self.jwt.expanded()
-        if p in {"local", "oidc", "dingtalk"} and not jwt_cfg.secret_key:
-            raise ValueError(
-                "auth.jwt.secret_key is required when auth.provider is 'local', 'oidc' or 'dingtalk'"
-            )
 
 

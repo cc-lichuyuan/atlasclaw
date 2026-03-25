@@ -234,17 +234,6 @@ class TestChatAPI:
 class TestSessionAPI:
     """Session API 测试"""
 
-    @pytest.mark.skip(reason="API endpoint /api/sessions not implemented in current version")
-    @pytest.mark.asyncio
-    async def test_list_sessions(self, client: httpx.AsyncClient):
-        """测试列出会话"""
-        resp = await client.get("/api/sessions")
-        assert resp.status_code == 200
-        
-        data = resp.json()
-        assert "sessions" in data
-        assert isinstance(data["sessions"], list)
-
     @pytest.mark.asyncio
     async def test_get_session_history(self, client: httpx.AsyncClient, kimi_env_vars):
         """测试获取会话历史"""
@@ -281,15 +270,6 @@ class TestSessionAPI:
 
 class TestErrorHandling:
     """错误处理测试"""
-
-    @pytest.mark.skip(reason="API endpoint /api/chat validation behavior changed")
-    @pytest.mark.asyncio
-    async def test_chat_missing_message(self, client: httpx.AsyncClient):
-        """测试缺少消息参数"""
-        payload = {"session_key": "test-session"}
-        
-        resp = await client.post("/api/chat", json=payload)
-        assert resp.status_code == 422  # Validation error
 
     @pytest.mark.asyncio
     async def test_invalid_endpoint(self, client: httpx.AsyncClient):
