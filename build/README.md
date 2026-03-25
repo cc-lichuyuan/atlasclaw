@@ -102,7 +102,7 @@ cd /opt/atlasclaw/extensions
 curl -L -o atlasclaw-providers.zip https://github.com/CloudChef/atlasclaw-providers/archive/refs/heads/main.zip
 unzip atlasclaw-providers.zip
 mv atlasclaw-providers-main src
-rm atlasclaw-providers.zip
+rm -f atlasclaw-providers.zip
 
 # Copy providers (optional)
 cp -r src/providers/* ./providers/ 2>/dev/null || true
