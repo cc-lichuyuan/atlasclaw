@@ -21,10 +21,7 @@ from typing import Any, Optional
 
 from dotenv import load_dotenv
 
-# Clear proxy settings for LLM API calls to avoid timeout issues
 import os
-for proxy_var in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy"]:
-    os.environ.pop(proxy_var, None)
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent.parent / ".env", override=False)
 
