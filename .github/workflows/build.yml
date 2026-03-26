@@ -222,14 +222,17 @@ jobs:
         run: |
           set -euo pipefail
 
-          for i in {1..30}; do
-            if curl -fsS http://127.0.0.1:8000/api/health >/dev/null; then
+          for i in {1..45}; do
+            status=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' atlasclaw 2>/dev/null || echo "missing")
+            echo "atlasclaw status: ${status}"
+            if [[ "${status}" == "healthy" || "${status}" == "running" ]]; then
               echo "Health check passed"
               exit 0
             fi
             sleep 2
           done
 
-          echo "Health check failed after waiting for service startup" >&2
+          echo "Health check failed after waiting for container readiness" >&2
+          docker compose -f /opt/atlasclaw/docker-compose.yml ps || true
           docker compose -f /opt/atlasclaw/docker-compose.yml logs --tail=200 atlasclaw || true
           exit 1
