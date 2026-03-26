@@ -96,9 +96,6 @@ jobs:
     runs-on: [self-hosted, linux, atlasclaw]
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
       - name: Login to Aliyun ACR
         uses: docker/login-action@v3
         with:
@@ -111,27 +108,35 @@ jobs:
           sudo mkdir -p /opt/atlasclaw/{workspace,data,extensions/{providers,skills,channels}}
           sudo chown -R "$(id -u):$(id -g)" /opt/atlasclaw
 
-      - name: Download compose and extensions with curl
+      - name: Download compose and extensions with curl (with fallback)
         run: |
           set -euo pipefail
           cd /opt/atlasclaw
 
-          curl -fL -o docker-compose.yml \
-            https://raw.githubusercontent.com/CloudChef/atlasclaw/main/build/docker-compose.yml
+          if ! curl --retry 3 --retry-delay 3 --connect-timeout 10 -fL -o docker-compose.yml \
+            https://raw.githubusercontent.com/CloudChef/atlasclaw/main/build/docker-compose.yml; then
+            if [[ ! -f /opt/atlasclaw/docker-compose.yml ]]; then
+              echo "Failed to download docker-compose.yml and local file not found" >&2
+              exit 1
+            fi
+            echo "Using existing /opt/atlasclaw/docker-compose.yml"
+          fi
 
           cd /opt/atlasclaw/extensions
-          curl -fL -o atlasclaw-providers.zip \
-            https://github.com/CloudChef/atlasclaw-providers/archive/refs/heads/main.zip
+          if curl --retry 3 --retry-delay 3 --connect-timeout 10 -fL -o atlasclaw-providers.zip \
+            https://github.com/CloudChef/atlasclaw-providers/archive/refs/heads/main.zip; then
+            rm -rf src atlasclaw-providers-main
+            unzip -o atlasclaw-providers.zip
+            rm -f atlasclaw-providers.zip
+            mv atlasclaw-providers-main src
 
-          rm -rf src atlasclaw-providers-main
-          unzip -o atlasclaw-providers.zip
-          rm -f atlasclaw-providers.zip
-          mv atlasclaw-providers-main src
-
-          cp -r src/providers/* ./providers/ 2>/dev/null || true
-          cp -r src/skills/* ./skills/ 2>/dev/null || true
-          cp -r src/channels/* ./channels/ 2>/dev/null || true
-          rm -rf src
+            cp -r src/providers/* ./providers/ 2>/dev/null || true
+            cp -r src/skills/* ./skills/ 2>/dev/null || true
+            cp -r src/channels/* ./channels/ 2>/dev/null || true
+            rm -rf src
+          else
+            echo "Failed to download providers zip, keep existing extension directories"
+          fi
 
       - name: Initialize atlasclaw.json if missing
         env:
