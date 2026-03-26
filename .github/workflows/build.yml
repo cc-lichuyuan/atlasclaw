@@ -93,7 +93,7 @@ jobs:
   deploy-on-self-hosted:
     name: Deploy to self-hosted runner
     needs: build-and-push
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux, atlasclaw]
 
     steps:
       - name: Checkout code
@@ -140,19 +140,23 @@ jobs:
         run: |
           set -euo pipefail
 
+          CONFIG_PATH="/opt/atlasclaw/workspace/atlasclaw.json"
+          if [[ -f "$CONFIG_PATH" ]]; then
+            echo "atlasclaw.json exists, keeping current configuration."
+            exit 0
+          fi
+
           if [[ -z "${ATLASCLAW_MODEL_API_KEY:-}" ]]; then
             echo "ATLASCLAW_MODEL_API_KEY secret is required for deployment." >&2
             exit 1
           fi
 
+          JWT_SECRET="${ATLASCLAW_JWT_SECRET:-atlasclaw-docker-secret-CHANGE-ME}"
           if [[ -z "${ATLASCLAW_JWT_SECRET:-}" ]]; then
-            echo "ATLASCLAW_JWT_SECRET secret is required for deployment." >&2
-            exit 1
+            echo "ATLASCLAW_JWT_SECRET not set, using default placeholder; change it after first deploy." >&2
           fi
 
-          CONFIG_PATH="/opt/atlasclaw/workspace/atlasclaw.json"
-          if [[ ! -f "$CONFIG_PATH" ]]; then
-            cat > "$CONFIG_PATH" <<EOF
+          cat > "$CONFIG_PATH" <<EOF
           {
             "workspace": {
               "path": "/app/workspace"
@@ -189,16 +193,13 @@ jobs:
                 "default_admin_password": "admin"
               },
               "jwt": {
-                "secret_key": "${ATLASCLAW_JWT_SECRET}",
+                "secret_key": "${JWT_SECRET}",
                 "expires_minutes": 480
               }
             }
           }
           EOF
-            chmod 600 "$CONFIG_PATH"
-          else
-            echo "atlasclaw.json exists, keeping current configuration."
-          fi
+          chmod 600 "$CONFIG_PATH"
 
       - name: Pull and deploy latest image
         run: |
