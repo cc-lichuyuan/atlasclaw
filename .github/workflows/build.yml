@@ -125,15 +125,44 @@ jobs:
           cd /opt/atlasclaw/extensions
           if curl --retry 3 --retry-delay 3 --connect-timeout 10 -fL -o atlasclaw-providers.zip \
             https://github.com/CloudChef/atlasclaw-providers/archive/refs/heads/main.zip; then
-            rm -rf src atlasclaw-providers-main
-            unzip -o atlasclaw-providers.zip
-            rm -f atlasclaw-providers.zip
-            mv atlasclaw-providers-main src
+            # Check if unzip is available
+            if ! command -v unzip &> /dev/null; then
+              echo "ERROR: unzip command not found. Please install unzip: sudo apt-get install unzip (or yum install unzip)" >&2
+              rm -f atlasclaw-providers.zip
+              exit 1
+            fi
 
-            cp -r src/providers/* ./providers/ 2>/dev/null || true
-            cp -r src/skills/* ./skills/ 2>/dev/null || true
-            cp -r src/channels/* ./channels/ 2>/dev/null || true
-            rm -rf src
+            # Clean up old temp directory
+            rm -rf atlasclaw-providers-main
+
+            # Extract zip
+            if ! unzip -o atlasclaw-providers.zip; then
+              echo "ERROR: Failed to extract atlasclaw-providers.zip" >&2
+              rm -f atlasclaw-providers.zip
+              exit 1
+            fi
+            rm -f atlasclaw-providers.zip
+
+            # Verify extracted directory exists
+            if [[ ! -d atlasclaw-providers-main ]]; then
+              echo "ERROR: Expected directory 'atlasclaw-providers-main' not found after extraction" >&2
+              exit 1
+            fi
+
+            # Copy files to extensions directories
+            if [[ -d atlasclaw-providers-main/providers ]]; then
+              cp -r atlasclaw-providers-main/providers/* ./providers/ 2>/dev/null || true
+            fi
+            if [[ -d atlasclaw-providers-main/skills ]]; then
+              cp -r atlasclaw-providers-main/skills/* ./skills/ 2>/dev/null || true
+            fi
+            if [[ -d atlasclaw-providers-main/channels ]]; then
+              cp -r atlasclaw-providers-main/channels/* ./channels/ 2>/dev/null || true
+            fi
+
+            # Clean up
+            rm -rf atlasclaw-providers-main
+            echo "Extensions updated successfully"
           else
             echo "Failed to download providers zip, keep existing extension directories"
           fi
