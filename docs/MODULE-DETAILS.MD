@@ -125,7 +125,7 @@ Pydantic models defining all configuration sections.
 | `HumanDelayConfig` | `mode=OFF`, `min_ms=800`, `max_ms=2500` |
 | `SandboxConfig` | `enabled=False`, `mode=OFF`, `workspace_root=""`, `elevated_exec=False` |
 | `SecurityPolicyConfig` | `allowed_tools=[]`, `denied_tools=[]`, `workspace_access="rw"` |
-| `SkillsConfig` | `md_skills_max_count=20`, `md_skills_desc_max_chars=200`, `md_skills_index_max_chars=3000`, `md_skills_max_file_bytes=262144` |
+| `SkillsConfig` | `md_skills_max_count=20`, `md_skills_desc_max_chars=200`, `md_skills_index_max_chars=3000`, `md_skills_max_file_bytes=262144`, `allow_script_execution=False` |
 | `WebhookConfig` | `enabled=False`, `header_name="X-AtlasClaw-SK"`, `systems=[]` |
 | `WebhookSystemConfig` | `system_id`, `enabled=True`, `sk_env`, `default_agent_id="main"`, `allowed_skills=[]` |
 | `ModelConfig` | `primary="doubao-pro-32k"`, `fallbacks=[]`, `temperature=0.7`, `max_tokens=None`, `providers={}` |
@@ -281,6 +281,10 @@ Creates the global workspace directory structure on first run:
 └── users/
 ```
 
+Default `agents/main/` files are copied from the repo template directory at
+`app/atlasclaw/templates/agents/main/`. Existing files are preserved; only
+missing files are restored.
+
 | Method | Signature | Description |
 |---|---|---|
 | `initialize` | `() -> bool` | Create workspace structure; returns True if created |
@@ -303,6 +307,16 @@ users/<user_id>/
 | `is_initialized` | `() -> bool` | Check if user workspace exists |
 | `get_sessions_dir` | `() -> Path` | Get user sessions directory |
 | `get_memory_dir` | `() -> Path` | Get user memory directory |
+
+**Class: `SessionManagerRouter` (`session/router.py`)**
+
+Routes runtime session persistence to the correct `workspace/users/<user_id>/sessions/` bucket.
+
+| Method | Signature | Description |
+|---|---|---|
+| `from_manager` | `(manager: SessionManager) -> SessionManagerRouter` | Clone reset/storage settings from an existing manager |
+| `for_user` | `(user_id: str) -> SessionManager` | Resolve the per-user session manager |
+| `for_session_key` | `(session_key: str) -> SessionManager` | Resolve storage from `SessionKey.user_id` |
 
 ### 1.5 Service Provider Registry (`core/provider_registry.py`)
 
@@ -996,8 +1010,8 @@ Built-in tool definitions, profiles, group management, and registration.
 
 | Constant | Tools |
 |---|---|
-| `GROUP_FS` | `read`, `write`, `edit`, `delete_file` |
-| `GROUP_RUNTIME` | `exec`, `process` |
+| `GROUP_FS` | None (high-risk filesystem tools removed from built-in profiles) |
+| `GROUP_RUNTIME` | None (high-risk runtime tools removed from built-in profiles) |
 | `GROUP_WEB` | `web_search`, `web_fetch` |
 | `GROUP_MEMORY` | `memory_search`, `memory_get` |
 | `GROUP_SESSIONS` | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `subagents`, `session_status` |
@@ -1009,7 +1023,7 @@ Built-in tool definitions, profiles, group management, and registration.
 | Profile | Tools Included |
 |---|---|
 | `MINIMAL` | `session_status` only |
-| `CODING` | `GROUP_FS` + `GROUP_RUNTIME` + `GROUP_SESSIONS` + `GROUP_MEMORY` + `GROUP_UI` |
+| `CODING` | `GROUP_SESSIONS` + `GROUP_MEMORY` + `GROUP_UI` |
 | `MESSAGING` | `sessions_list`, `sessions_history`, `sessions_send`, `session_status` |
 | `FULL` | All tool groups |
 
@@ -1028,14 +1042,10 @@ Built-in tool definitions, profiles, group management, and registration.
 ### 6.3 Built-in Tool Groups
 
 **Filesystem** (`tools/filesystem/`):
-- `read_tool.py` — Read file contents
-- `write_tool.py` — Write/create files
-- `edit_tool.py` — Edit existing files
-- `delete_tool.py` — Delete files
+- Legacy file tools remain in the source tree for compatibility, but are not registered by default
 
 **Runtime** (`tools/runtime/`):
-- `exec_tool.py` — Execute shell commands (via `asyncio.create_subprocess_shell`)
-- `process_tool.py` — Process management (start/stop/list)
+- Legacy runtime tools remain in the source tree for compatibility, but are not registered by default
 
 **Memory** (`tools/memory/`):
 - `search_tool.py` — Search memory entries
