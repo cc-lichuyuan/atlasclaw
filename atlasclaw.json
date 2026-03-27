@@ -24,7 +24,7 @@
   "skills_root": "../atlasclaw-providers/skills",
   "channels_root": "../atlasclaw-providers/channels",
   "model": {
-    "primary": "model-1",
+    "primary": "model-2",
     "fallbacks": [],
     "temperature": "${LLM_TEMPERATURE}",
     "selection_strategy": "health",
@@ -73,10 +73,10 @@
     },
     "smartcmp": {
       "default": {
-        "cmp_url": "${CMP_URL}",
-        "cmp_cookie": "${CMP_COOKIE}",
-        "cmp_username": "${CMP_USERNAME}",
-        "cmp_password": "${CMP_PASSWORD}"
+        "base_url": "${CMP_URL}",
+        "cookie": "${CMP_COOKIE}",
+        "username": "${CMP_USERNAME}",
+        "password": "${CMP_PASSWORD}"
       }
     },
     "dingtalk": {
@@ -125,6 +125,9 @@
       "pkce_method": "S256",
       "subject_field": "unionId"
     }
+  },
+  "skills": {
+    "allow_script_execution": true
   },
   "agent_defaults": {
     "max_concurrent": 10
