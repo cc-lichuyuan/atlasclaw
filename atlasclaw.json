@@ -24,7 +24,7 @@
   "skills_root": "../atlasclaw-providers/skills",
   "channels_root": "../atlasclaw-providers/channels",
   "model": {
-    "primary": "model-2",
+    "primary": "model-1",
     "fallbacks": [],
     "temperature": "${LLM_TEMPERATURE}",
     "selection_strategy": "health",
