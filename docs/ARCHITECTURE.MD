@@ -791,6 +791,36 @@ The agent engine produces `StreamEvent` objects through an async iterator:
 
 Configurable via `BlockChunkerConfig`, controls how streaming text is chunked for delivery to channels that require complete blocks (e.g., IM platforms).
 
+### 10.5 Unified Heartbeat Runtime
+
+AtlasClaw includes a unified `HeartbeatRuntime` for periodic health and maintenance work.
+It is intentionally separate from transport-level keepalive in SSE/WebSocket and separate from
+the Hook Runtime's downstream event-consumption responsibilities.
+
+Core responsibilities:
+
+- schedule and execute typed heartbeat jobs
+- persist heartbeat job definitions, state snapshots, and local event logs
+- emit standard heartbeat runtime events
+- bridge heartbeat outcomes into Hook Runtime consumers
+- support both OpenClaw-style agent heartbeat turns and AtlasClaw channel connection supervision
+
+Supported job types:
+
+- `agent_turn`
+  - periodic autonomous agent turn
+  - supports `HEARTBEAT.md`, `every`, `activeHours`, `isolatedSession`, and `HEARTBEAT_OK`
+- `channel_connection`
+  - periodic long-connection health probe and reconnect supervision
+  - used for Feishu, DingTalk, WeCom, and other long-lived channel connections
+
+Design rules:
+
+- Heartbeat emits runtime events first; notification is handled by downstream consumers.
+- Group-chat targets default to summary-only delivery semantics.
+- Channel heartbeat retries quietly before surfacing degraded or failure events.
+- Agent heartbeat may use isolated sessions to avoid polluting primary user conversation history.
+
 ---
 
 ## 11. Data Storage Model
@@ -839,6 +869,20 @@ directory.
 **Isolation**:
 - State is scoped by authenticated AtlasClaw `user_id`
 - Hook modules do not share files unless they intentionally use the same module name
+
+### 11.4 Heartbeat Runtime State
+
+**Format**: JSON / JSONL
+**Location**: `<workspace>/users/<user_id>/heartbeat/`
+**Files**:
+- `jobs.json` — Registered heartbeat job definitions
+- `state.json` — Durable heartbeat job state snapshots
+- `events.jsonl` — Local heartbeat runtime event log
+
+Heartbeat state is intentionally separate from Hook Runtime state:
+
+- heartbeat owns scheduling, retry, health, and delivery target resolution
+- hooks consume emitted heartbeat events downstream
 
 ### 11.4 Users
 
