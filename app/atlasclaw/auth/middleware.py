@@ -79,22 +79,51 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.user_info = ANONYMOUS_USER
             return await call_next(request)
 
-        if request.url.path in _SSO_PATHS:
-            request.state.user_info = ANONYMOUS_USER
-            return await call_next(request)
-
         if self._anonymous_fallback:
             request.state.user_info = ANONYMOUS_USER
             return await call_next(request)
 
         provider_name = self._current_provider_name()
 
-
         if provider_name == "none":
             try:
                 request.state.user_info = await self._strategy.resolve_user("")
             except Exception:
                 request.state.user_info = ANONYMOUS_USER
+            return await call_next(request)
+
+        # CMP mode: extract user identity from CMP cookies (no API call)
+        # Must run BEFORE _SSO_PATHS skip so /api/auth/me gets CMP user info
+        if provider_name == "cmp":
+            from app.atlasclaw.auth.providers.cmp import CMPAuthProvider
+            cookies = dict(request.cookies)
+            logger.warning("CMP DEBUG: path=%s cookies=%s", request.url.path, list(cookies.keys()))
+            cmp_provider = self._strategy.primary_provider
+            if not isinstance(cmp_provider, CMPAuthProvider):
+                return JSONResponse(status_code=500, content={"detail": "CMP provider misconfigured"})
+            try:
+                auth_result = await cmp_provider.authenticate_from_cookies(cookies)
+                logger.warning("CMP DEBUG: auth_result subject=%s", auth_result.subject)
+                shadow = await self._strategy._shadow_store.get_or_create(
+                    provider="cmp", result=auth_result,
+                )
+                logger.warning("CMP DEBUG: shadow user_id=%s", shadow.user_id)
+                self._strategy.ensure_user_workspace(shadow.user_id)
+                request.state.user_info = shadow.to_user_info(
+                    raw_token=auth_result.raw_token
+                )
+                logger.warning("CMP DEBUG: user_info set, proceeding")
+                return await call_next(request)
+            except AuthenticationError as exc:
+                logger.warning("CMP cookie auth FAILED (AuthenticationError): %s", exc)
+                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            except Exception as exc:
+                logger.warning("CMP cookie auth FAILED (unexpected): %s %s", type(exc).__name__, exc)
+                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+
+        # SSO paths: skip auth for non-CMP providers (login, callback, etc.)
+        if request.url.path in _SSO_PATHS:
+            request.state.user_info = ANONYMOUS_USER
             return await call_next(request)
 
         if provider_name != "none":
@@ -192,7 +221,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # SSO providers (oidc, dingtalk, etc.) redirect to /api/auth/login
             # Use reverse exclusion pattern: all providers except local/none/empty are SSO
             # This way, new SSO providers (feishu, wecom, etc.) work without code changes
-            if provider_name not in ("local", "none", ""):
+            if provider_name not in ("local", "none", "cmp", ""):
                 return RedirectResponse(url="/api/auth/login", status_code=302)
 
             original = f"{request.url.path}"
@@ -218,6 +247,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if token:
                 return token
 
+        return ""
+
+    @staticmethod
+    def _extract_cmp_token(request: Request) -> str:
+        """Extract CloudChef-Authenticate token from header or cookie."""
+        token = request.headers.get("CloudChef-Authenticate", "").strip()
+        if token:
+            return token
+        token = request.cookies.get("CloudChef-Authenticate", "").strip()
+        if token:
+            return token
         return ""
 
     @staticmethod
