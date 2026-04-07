@@ -393,6 +393,22 @@ async def get_current_user_payload(request: Request) -> dict[str, Any]:
             "provider": "none",
         }
 
+    # CMP mode: user identity already resolved by middleware from cookies
+    if auth_config.provider == "cmp":
+        user_info = getattr(request.state, "user_info", None)
+        if user_info and user_info.user_id != "anonymous":
+            return {
+                "user_id": user_info.user_id,
+                "display_name": user_info.display_name,
+                "provider": "cmp",
+                "auth_type": "cmp",
+                "tenant_id": user_info.tenant_id,
+            }
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+
     jwt_cfg = auth_config.jwt.expanded()
     token = extract_atlas_token_from_request(
         request,
