@@ -15,6 +15,7 @@ def build_system_prompt(
     *,
     agent: Optional[Any] = None,
     context_window_tokens: Optional[int] = None,
+    prompt_mode: Optional[Any] = None,
 ) -> str:
     """Build the runtime system prompt for the current session."""
     kwargs = {
@@ -27,6 +28,7 @@ def build_system_prompt(
         "user_info": deps.user_info,
         "provider_contexts": collect_provider_contexts(deps),
         "context_window_tokens": context_window_tokens,
+        "mode_override": prompt_mode,
     }
     build_fn = prompt_builder.build
     try:

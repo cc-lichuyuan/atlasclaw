@@ -11,7 +11,10 @@ from app.atlasclaw.agent.runner_tool.runner_execution_flow_error import RunnerEx
 from app.atlasclaw.agent.runner_tool.runner_execution_flow import RunnerExecutionFlowPhaseMixin
 from app.atlasclaw.agent.runner_tool.runner_execution_flow_post import RunnerExecutionFlowPostMixin
 from app.atlasclaw.agent.runner_tool.runner_execution_flow_stream import RunnerExecutionFlowStreamMixin
-from app.atlasclaw.agent.runner_tool.runner_execution_payload import RunnerExecutionPayloadMixin
+from app.atlasclaw.agent.runner_tool.runner_execution_payload import (
+    RunnerExecutionPayloadMixin,
+    build_finalize_payload,
+)
 from app.atlasclaw.agent.runner_tool.runner_execution_retry import RunnerExecutionRetryMixin
 from app.atlasclaw.agent.runner_tool.runner_tool_messages import (
     extract_synthetic_tool_messages_from_next_node,
@@ -1160,3 +1163,19 @@ async def _empty_async_iter():
 
 async def _noop_async(*args, **kwargs):
     return None
+
+
+def test_build_finalize_payload_is_minimal_for_tool_backed_answer() -> None:
+    payload = build_finalize_payload(
+        user_message="明天上海天气如何",
+        tool_results=[
+            {
+                "tool_name": "openmeteo_weather",
+                "content": "明天（2026-04-12）上海：小雨，13.8°C - 18.6°C，降水概率 63%。",
+            }
+        ],
+    )
+
+    assert "bootstrap" not in payload["system_prompt"].lower()
+    assert "明天上海天气如何" in payload["user_prompt"]
+    assert "openmeteo_weather" in payload["user_prompt"]

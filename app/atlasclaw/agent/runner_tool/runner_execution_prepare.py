@@ -5,6 +5,7 @@ import logging
 import time
 from typing import Any, AsyncIterator, Optional
 
+from app.atlasclaw.agent.prompt_builder import PromptMode
 from app.atlasclaw.agent.context_pruning import prune_context_messages, should_apply_context_pruning
 from app.atlasclaw.agent.context_window_guard import evaluate_context_window_guard
 from app.atlasclaw.agent.runner_prompt_context import build_system_prompt, collect_tool_groups_snapshot, collect_tools_snapshot
@@ -26,6 +27,24 @@ from app.atlasclaw.core.deps import SkillDeps
 
 
 logger = logging.getLogger(__name__)
+
+
+def select_execution_prompt_mode(
+    *,
+    intent_action: str,
+    is_follow_up: bool,
+    projected_tool_count: int,
+) -> PromptMode:
+    """Choose a lighter prompt for explicit tool turns with a small projected toolset."""
+    normalized_action = str(intent_action or "").strip().lower()
+    if normalized_action != ToolIntentAction.USE_TOOLS.value:
+        return PromptMode.FULL
+    if is_follow_up:
+        return PromptMode.FULL
+    safe_projected_count = max(0, int(projected_tool_count or 0))
+    if 0 < safe_projected_count <= 12:
+        return PromptMode.MINIMAL
+    return PromptMode.FULL
 
 
 class RunnerExecutionPreparePhaseMixin:
@@ -90,7 +109,7 @@ class RunnerExecutionPreparePhaseMixin:
         used_toolset_fallback = state.get("used_toolset_fallback")
         provider_hint_docs = state.get("provider_hint_docs")
         skill_hint_docs = state.get("skill_hint_docs")
-        builtin_tool_hint_docs = state.get("builtin_tool_hint_docs")
+        tool_hint_docs = state.get("tool_hint_docs")
         metadata_candidates = state.get("metadata_candidates")
         ranking_trace = state.get("ranking_trace")
         runtime_message_history = state.get("runtime_message_history")
@@ -244,18 +263,18 @@ class RunnerExecutionPreparePhaseMixin:
                 deps=deps,
                 available_tools=available_tools,
             )
-            builtin_tool_hint_docs = self._build_builtin_tool_hint_docs(
+            tool_hint_docs = self._build_tool_hint_docs(
                 available_tools=available_tools,
             )
             if isinstance(deps.extra, dict):
                 deps.extra["provider_hint_docs"] = provider_hint_docs
                 deps.extra["skill_hint_docs"] = skill_hint_docs
-                deps.extra["builtin_tool_hint_docs"] = builtin_tool_hint_docs
+                deps.extra["tool_hint_docs"] = tool_hint_docs
             _log_step(
                 "hint_docs_built",
                 provider_hint_count=len(provider_hint_docs),
                 skill_hint_count=len(skill_hint_docs),
-                builtin_tool_hint_count=len(builtin_tool_hint_docs),
+                tool_hint_count=len(tool_hint_docs),
             )
             tool_request_message, used_follow_up_context = self._resolve_contextual_tool_request(
                 user_message=user_message,
@@ -274,7 +293,7 @@ class RunnerExecutionPreparePhaseMixin:
                 available_tools=available_tools,
                 provider_hint_docs=provider_hint_docs,
                 skill_hint_docs=skill_hint_docs,
-                builtin_tool_hint_docs=builtin_tool_hint_docs,
+                tool_hint_docs=tool_hint_docs,
                 top_k_provider=self.TOOL_METADATA_PROVIDER_TOP_K,
                 top_k_skill=self.TOOL_METADATA_SKILL_TOP_K,
             )
@@ -328,8 +347,8 @@ class RunnerExecutionPreparePhaseMixin:
                 hint_docs=skill_hint_docs,
                 planner_available_tools=planner_available_tools,
             )
-            planner_builtin_tool_hint_docs = self._filter_hint_docs_for_planner_tools(
-                hint_docs=builtin_tool_hint_docs,
+            planner_tool_hint_docs = self._filter_hint_docs_for_planner_tools(
+                hint_docs=tool_hint_docs,
                 planner_available_tools=planner_available_tools,
             )
             _log_step(
@@ -388,7 +407,7 @@ class RunnerExecutionPreparePhaseMixin:
                         available_tools=planner_available_tools,
                         provider_hint_docs=planner_provider_hint_docs,
                         skill_hint_docs=planner_skill_hint_docs,
-                        builtin_tool_hint_docs=planner_builtin_tool_hint_docs,
+                        tool_hint_docs=planner_tool_hint_docs,
                     )
                 if tool_intent_plan is None:
                     tool_intent_plan = ToolIntentPlan(
@@ -482,6 +501,17 @@ class RunnerExecutionPreparePhaseMixin:
                 tool_execution_required=tool_execution_required,
                 reasoning_retry_limit=reasoning_retry_limit,
             )
+            prompt_mode = select_execution_prompt_mode(
+                intent_action=tool_intent_plan.action.value,
+                is_follow_up=used_follow_up_context,
+                projected_tool_count=len(available_tools),
+            )
+            _log_step(
+                "execution_prompt_mode_selected",
+                mode=prompt_mode.value,
+                projected_tool_count=len(available_tools),
+                used_follow_up_context=used_follow_up_context,
+            )
             await self.runtime_events.trigger_tool_gate_evaluated(
                 session_key=session_key,
                 run_id=run_id,
@@ -515,6 +545,7 @@ class RunnerExecutionPreparePhaseMixin:
                 deps=deps,
                 agent=runtime_agent or self.agent,
                 context_window_tokens=runtime_context_window,
+                prompt_mode=prompt_mode,
             )
             consume_prompt_warnings = getattr(self.prompt_builder, "consume_warnings", None)
             if callable(consume_prompt_warnings):
@@ -688,9 +719,10 @@ class RunnerExecutionPreparePhaseMixin:
                 "used_toolset_fallback": used_toolset_fallback,
                 "provider_hint_docs": provider_hint_docs,
                 "skill_hint_docs": skill_hint_docs,
-                "builtin_tool_hint_docs": builtin_tool_hint_docs,
+                "tool_hint_docs": tool_hint_docs,
                 "metadata_candidates": metadata_candidates,
                 "ranking_trace": ranking_trace,
+                "prompt_mode": prompt_mode,
             })
 
     @staticmethod

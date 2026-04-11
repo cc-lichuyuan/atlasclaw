@@ -867,7 +867,7 @@ class RunnerToolGateRoutingMixin:
             )
         return docs
 
-    def _build_builtin_tool_hint_docs(
+    def _build_tool_hint_docs(
         self,
         *,
         available_tools: list[dict[str, Any]],
@@ -876,11 +876,10 @@ class RunnerToolGateRoutingMixin:
         for tool in available_tools:
             if not isinstance(tool, dict):
                 continue
-            if str(tool.get("source", "") or "").strip().lower() != "builtin":
-                continue
             tool_name = str(tool.get("name", "") or "").strip()
             if not tool_name:
                 continue
+            provider_type = str(tool.get("provider_type", "") or "").strip().lower()
             capability_class = str(tool.get("capability_class", "") or "").strip().lower()
             group_ids = [
                 str(item).strip()
@@ -906,6 +905,7 @@ class RunnerToolGateRoutingMixin:
                     "hint_id": f"tool:{tool_name}",
                     "hint_type": "tool",
                     "tool_name": tool_name,
+                    "provider_type": provider_type,
                     "display_name": tool_name,
                     "description": str(tool.get("description", "") or ""),
                     "aliases": list(tool.get("aliases", []) or []),
@@ -921,6 +921,14 @@ class RunnerToolGateRoutingMixin:
                 }
             )
         return docs
+
+    def _build_builtin_tool_hint_docs(
+        self,
+        *,
+        available_tools: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Backward-compatible wrapper for legacy callers."""
+        return self._build_tool_hint_docs(available_tools=available_tools)
     @staticmethod
     def _extract_md_declared_tool_names(metadata: dict[str, Any]) -> list[str]:
         names: list[str] = []
@@ -1076,7 +1084,7 @@ class RunnerToolGateRoutingMixin:
         available_tools: list[dict[str, Any]],
         provider_hint_docs: list[dict[str, Any]],
         skill_hint_docs: list[dict[str, Any]],
-        builtin_tool_hint_docs: list[dict[str, Any]],
+        tool_hint_docs: list[dict[str, Any]],
         top_k_provider: int,
         top_k_skill: int,
     ) -> dict[str, Any]:
@@ -1192,8 +1200,8 @@ class RunnerToolGateRoutingMixin:
         skill_ranked.sort(key=lambda item: (-int(item.get("score", 0) or 0), str(item.get("hint_id", ""))))
         skill_top = skill_ranked[:top_k_skill]
 
-        builtin_ranked: list[dict[str, Any]] = []
-        for doc in builtin_tool_hint_docs:
+        tool_ranked: list[dict[str, Any]] = []
+        for doc in tool_hint_docs:
             if not isinstance(doc, dict):
                 continue
             score, matched_tokens, has_strong_anchor = self._score_metadata_hint_doc(
@@ -1207,10 +1215,11 @@ class RunnerToolGateRoutingMixin:
             tool_name = str(doc.get("tool_name", "") or "").strip()
             if tool_name and tool_name not in tool_name_set:
                 continue
-            builtin_ranked.append(
+            tool_ranked.append(
                 {
                     "hint_id": str(doc.get("hint_id", "") or "").strip(),
                     "tool_name": tool_name,
+                    "provider_type": str(doc.get("provider_type", "") or "").strip().lower(),
                     "score": score,
                     "has_strong_anchor": has_strong_anchor,
                     "matched_tokens": matched_tokens,
@@ -1227,20 +1236,20 @@ class RunnerToolGateRoutingMixin:
                     ],
                 }
             )
-        builtin_ranked.sort(key=lambda item: (-int(item.get("score", 0) or 0), str(item.get("hint_id", ""))))
-        builtin_top = builtin_ranked[: max(1, min(4, top_k_skill))]
+        tool_ranked.sort(key=lambda item: (-int(item.get("score", 0) or 0), str(item.get("hint_id", ""))))
+        tool_top = tool_ranked[: max(1, min(4, top_k_skill))]
 
         preferred_provider_types = self._dedupe_preserve_order(
             [
                 str(item.get("provider_type", "") or "").strip().lower()
-                for item in provider_top + skill_top
+                for item in provider_top + skill_top + tool_top
                 if str(item.get("provider_type", "") or "").strip()
             ]
         )
         preferred_group_ids = self._dedupe_preserve_order(
             [
                 str(group_id).strip()
-                for item in provider_top + skill_top + builtin_top
+                for item in provider_top + skill_top + tool_top
                 for group_id in (item.get("group_ids", []) or [])
                 if str(group_id).strip()
             ]
@@ -1248,7 +1257,7 @@ class RunnerToolGateRoutingMixin:
         preferred_capability_classes = self._dedupe_preserve_order(
             [
                 str(capability).strip().lower()
-                for item in provider_top + skill_top + builtin_top
+                for item in provider_top + skill_top + tool_top
                 for capability in (item.get("capability_classes", []) or [])
                 if str(capability).strip()
             ]
@@ -1256,24 +1265,24 @@ class RunnerToolGateRoutingMixin:
         preferred_tool_names = self._dedupe_preserve_order(
             [
                 str(name).strip()
-                for item in provider_top + skill_top + builtin_top
+                for item in provider_top + skill_top + tool_top
                 for name in (item.get("tool_names", []) or [])
                 if str(name).strip() in tool_name_set
             ]
         )[:12]
 
-        total_score = sum(int(item.get("score", 0) or 0) for item in provider_top + skill_top + builtin_top)
+        total_score = sum(int(item.get("score", 0) or 0) for item in provider_top + skill_top + tool_top)
         confidence_denominator = max(24, len(request_tokens) * 8)
         confidence = min(1.0, float(total_score) / float(confidence_denominator))
         reason = (
             "metadata_recall_matched"
-            if (provider_top or skill_top or builtin_top)
+            if (provider_top or skill_top or tool_top)
             else "metadata_recall_no_match"
         )
         return {
             "provider_candidates": provider_top,
             "skill_candidates": skill_top,
-            "builtin_tool_candidates": builtin_top,
+            "tool_candidates": tool_top,
             "preferred_provider_types": preferred_provider_types,
             "preferred_group_ids": preferred_group_ids,
             "preferred_capability_classes": preferred_capability_classes,

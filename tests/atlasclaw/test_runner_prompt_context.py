@@ -5,7 +5,9 @@ from types import SimpleNamespace
 
 from pydantic_ai import Agent
 
+from app.atlasclaw.agent.prompt_builder import PromptMode
 from app.atlasclaw.agent.runner_prompt_context import collect_tools_snapshot
+from app.atlasclaw.agent.runner_tool.runner_execution_prepare import select_execution_prompt_mode
 
 
 def test_collect_tools_snapshot_prefers_deps_extra_snapshot() -> None:
@@ -311,3 +313,23 @@ def test_collect_tools_snapshot_does_not_stringify_none_provider_metadata() -> N
             "planner_visibility": "general",
         }
     ]
+
+
+def test_select_execution_prompt_mode_uses_minimal_for_small_explicit_toolset() -> None:
+    mode = select_execution_prompt_mode(
+        intent_action="use_tools",
+        is_follow_up=False,
+        projected_tool_count=1,
+    )
+
+    assert mode is PromptMode.MINIMAL
+
+
+def test_select_execution_prompt_mode_keeps_full_for_follow_up_tool_turn() -> None:
+    mode = select_execution_prompt_mode(
+        intent_action="use_tools",
+        is_follow_up=True,
+        projected_tool_count=1,
+    )
+
+    assert mode is PromptMode.FULL

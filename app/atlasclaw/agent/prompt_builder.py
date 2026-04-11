@@ -118,6 +118,7 @@ class PromptBuilder:
         user_info: Optional["UserInfo"] = None,
         provider_contexts: Optional[dict[str, dict]] = None,
         context_window_tokens: Optional[int] = None,
+        mode_override: Optional[PromptMode] = None,
     ) -> str:
         """
         Build the full system prompt for the current run.
@@ -132,7 +133,9 @@ class PromptBuilder:
         Returns:
             The assembled system prompt text.
         """
-        if self.config.mode == PromptMode.NONE:
+        effective_mode = mode_override or self.config.mode
+
+        if effective_mode == PromptMode.NONE:
             return f"You are {self.config.agent_name}, {self.config.agent_description}."
 
         self._runtime_warnings.clear()
@@ -158,7 +161,7 @@ class PromptBuilder:
             if user_ctx:
                 parts.append(user_ctx)
         
-        if self.config.mode == PromptMode.FULL:
+        if effective_mode == PromptMode.FULL:
             # 4. Markdown skill index (HIGHEST PRIORITY - check these first!)
             if md_skills:
                 md_index = self._build_md_skills_index(md_skills, provider_contexts)

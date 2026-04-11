@@ -77,13 +77,13 @@ class RunnerToolGateModelMixin:
         available_tools: list[dict[str, Any]],
         provider_hint_docs: list[dict[str, Any]],
         skill_hint_docs: list[dict[str, Any]],
-        builtin_tool_hint_docs: list[dict[str, Any]],
+        tool_hint_docs: list[dict[str, Any]],
     ) -> Optional[ToolIntentPlan]:
         planner_prompt = self._build_tool_intent_plan_prompt(
             available_tools=available_tools,
             provider_hint_docs=provider_hint_docs,
             skill_hint_docs=skill_hint_docs,
-            builtin_tool_hint_docs=builtin_tool_hint_docs,
+            tool_hint_docs=tool_hint_docs,
         )
         planner_message = self._build_tool_intent_plan_message(
             user_message=user_message,
@@ -1365,7 +1365,7 @@ class RunnerToolGateModelMixin:
         available_tools: list[dict[str, Any]],
         provider_hint_docs: list[dict[str, Any]],
         skill_hint_docs: list[dict[str, Any]],
-        builtin_tool_hint_docs: list[dict[str, Any]],
+        tool_hint_docs: list[dict[str, Any]],
     ) -> str:
         tool_lines: list[str] = []
         for tool in available_tools:
@@ -1413,20 +1413,22 @@ class RunnerToolGateModelMixin:
         if not skill_lines:
             skill_lines.append("- none")
 
-        builtin_tool_lines: list[str] = []
-        for doc in builtin_tool_hint_docs:
+        tool_hint_lines: list[str] = []
+        for doc in tool_hint_docs:
             if not isinstance(doc, dict):
                 continue
             tool_name = str(doc.get("tool_name", "") or "").strip()
             if not tool_name:
                 continue
-            builtin_tool_lines.append(
+            provider_type = str(doc.get("provider_type", "") or "").strip()
+            tool_hint_lines.append(
                 f"- {tool_name} | "
+                f"provider={provider_type or '-'} | "
                 f"capabilities={', '.join(str(item).strip() for item in (doc.get('capability_classes', []) or []) if str(item).strip()) or '-'} | "
                 f"{str(doc.get('hint_text', '') or '').strip()}"
             )
-        if not builtin_tool_lines:
-            builtin_tool_lines.append("- none")
+        if not tool_hint_lines:
+            tool_hint_lines.append("- none")
 
         return (
             "You are AtlasClaw's internal tool-intent planner.\n"
@@ -1443,8 +1445,8 @@ class RunnerToolGateModelMixin:
             f"{chr(10).join(provider_lines)}\n\n"
             "Skill metadata:\n"
             f"{chr(10).join(skill_lines)}\n\n"
-            "Built-in tool metadata:\n"
-            f"{chr(10).join(builtin_tool_lines)}\n\n"
+            "Tool metadata:\n"
+            f"{chr(10).join(tool_hint_lines)}\n\n"
             "Return JSON with exactly these fields:\n"
             "{\n"
             '  "action": "direct_answer" | "ask_clarification" | "use_tools",\n'

@@ -7,6 +7,40 @@ from typing import Any, Optional
 from app.atlasclaw.core.deps import SkillDeps
 
 
+def build_finalize_payload(
+    *,
+    user_message: str,
+    tool_results: list[dict[str, Any]],
+) -> dict[str, str]:
+    """Build a minimal final-answer payload for a tool-backed turn."""
+    evidence_lines: list[str] = []
+    for item in tool_results or []:
+        if not isinstance(item, dict):
+            continue
+        tool_name = str(item.get("tool_name", "") or "").strip() or "tool"
+        content = str(item.get("content", "") or "").strip()
+        if not content:
+            continue
+        evidence_lines.append(f"- {tool_name}: {content}")
+
+    if not evidence_lines:
+        evidence_lines.append("- tool: no tool output available")
+
+    return {
+        "system_prompt": (
+            "You are AtlasClaw. Produce a concise markdown answer using only the supplied tool evidence. "
+            "Do not fabricate facts or mention hidden reasoning."
+        ),
+        "user_prompt": (
+            f"User request:\n{str(user_message or '').strip()}\n\n"
+            f"Tool evidence:\n{chr(10).join(evidence_lines)}\n\n"
+            "Return markdown with these sections:\n"
+            "## Answer\n"
+            "## Evidence\n"
+        ),
+    }
+
+
 class RunnerExecutionPayloadMixin:
     @staticmethod
     def _should_surface_prompt_warning(warning_message: Any) -> bool:

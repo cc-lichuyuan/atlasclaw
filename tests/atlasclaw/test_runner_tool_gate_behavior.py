@@ -274,7 +274,7 @@ def test_metadata_recall_ignores_history_when_not_follow_up() -> None:
         available_tools=available_tools,
         provider_hint_docs=provider_hint_docs,
         skill_hint_docs=skill_hint_docs,
-        builtin_tool_hint_docs=[],
+        tool_hint_docs=[],
         top_k_provider=2,
         top_k_skill=2,
     )
@@ -327,7 +327,7 @@ def test_metadata_recall_requires_strong_provider_anchor_for_public_query() -> N
         available_tools=available_tools,
         provider_hint_docs=provider_hint_docs,
         skill_hint_docs=[],
-        builtin_tool_hint_docs=[],
+        tool_hint_docs=[],
         top_k_provider=2,
         top_k_skill=2,
     )
@@ -336,7 +336,7 @@ def test_metadata_recall_requires_strong_provider_anchor_for_public_query() -> N
     assert recalled["preferred_tool_names"] == []
 
 
-def test_builtin_tool_hint_docs_support_weather_metadata_recall() -> None:
+def test_tool_hint_docs_support_weather_metadata_recall() -> None:
     runner = _GateRunner()
     available_tools = [
         {
@@ -353,7 +353,7 @@ def test_builtin_tool_hint_docs_support_weather_metadata_recall() -> None:
         }
     ]
 
-    builtin_docs = runner._build_builtin_tool_hint_docs(available_tools=available_tools)
+    builtin_docs = runner._build_tool_hint_docs(available_tools=available_tools)
     recalled = runner._recall_provider_skill_candidates_from_metadata(
         user_message="明天上海天气如何",
         recent_history=[],
@@ -361,7 +361,7 @@ def test_builtin_tool_hint_docs_support_weather_metadata_recall() -> None:
         available_tools=available_tools,
         provider_hint_docs=[],
         skill_hint_docs=[],
-        builtin_tool_hint_docs=builtin_docs,
+        tool_hint_docs=builtin_docs,
         top_k_provider=2,
         top_k_skill=2,
     )
@@ -369,6 +369,85 @@ def test_builtin_tool_hint_docs_support_weather_metadata_recall() -> None:
     assert "weather" in recalled["preferred_capability_classes"]
     assert recalled["preferred_tool_names"] == ["openmeteo_weather"]
     assert recalled["confidence"] > 0.0
+
+
+def test_tool_hint_docs_include_provider_tools() -> None:
+    runner = _GateRunner()
+    available_tools = [
+        {
+            "name": "smartcmp_get_request_detail",
+            "description": "Get CMP request detail by identifier",
+            "source": "provider",
+            "provider_type": "smartcmp",
+            "group_ids": ["group:cmp"],
+            "capability_class": "provider:smartcmp",
+            "keywords": ["detail", "request detail", "workflow"],
+            "use_when": ["User asks for CMP request detail"],
+            "avoid_when": [],
+        }
+    ]
+
+    docs = runner._build_tool_hint_docs(available_tools=available_tools)
+
+    assert docs == [
+        {
+            "hint_id": "tool:smartcmp_get_request_detail",
+            "hint_type": "tool",
+            "tool_name": "smartcmp_get_request_detail",
+            "provider_type": "smartcmp",
+            "display_name": "smartcmp_get_request_detail",
+            "description": "Get CMP request detail by identifier",
+            "aliases": [],
+            "keywords": ["detail", "request detail", "workflow"],
+            "capabilities": ["provider:smartcmp"],
+            "use_when": ["User asks for CMP request detail"],
+            "avoid_when": [],
+            "tool_names": ["smartcmp_get_request_detail"],
+            "group_ids": ["group:cmp"],
+            "capability_classes": ["provider:smartcmp"],
+            "hint_text": (
+                "name: smartcmp_get_request_detail | description: Get CMP request detail by "
+                "identifier | keywords: detail; request detail; workflow | capabilities: "
+                "provider:smartcmp | use_when: User asks for CMP request detail"
+            ),
+            "priority": 100,
+        }
+    ]
+
+
+def test_tool_hint_docs_support_provider_metadata_recall() -> None:
+    runner = _GateRunner()
+    available_tools = [
+        {
+            "name": "smartcmp_get_request_detail",
+            "description": "Get CMP request detail by identifier",
+            "source": "provider",
+            "provider_type": "smartcmp",
+            "group_ids": ["group:cmp", "group:request"],
+            "capability_class": "provider:smartcmp",
+            "aliases": ["cmp request detail", "工单详情"],
+            "keywords": ["cmp", "request detail", "workflow", "详情", "工单"],
+            "use_when": ["User asks for a CMP request detail page", "User asks for 工单详情"],
+            "avoid_when": [],
+        }
+    ]
+
+    tool_docs = runner._build_tool_hint_docs(available_tools=available_tools)
+    recalled = runner._recall_provider_skill_candidates_from_metadata(
+        user_message="我要看下TIC20260316000001的详情",
+        recent_history=[],
+        used_follow_up_context=False,
+        available_tools=available_tools,
+        provider_hint_docs=[],
+        skill_hint_docs=[],
+        tool_hint_docs=tool_docs,
+        top_k_provider=2,
+        top_k_skill=2,
+    )
+
+    assert recalled["preferred_provider_types"] == ["smartcmp"]
+    assert recalled["preferred_capability_classes"] == ["provider:smartcmp"]
+    assert recalled["preferred_tool_names"] == ["smartcmp_get_request_detail"]
 
 
 def test_metadata_fallback_builds_weather_plan_from_builtin_tool_candidates() -> None:
