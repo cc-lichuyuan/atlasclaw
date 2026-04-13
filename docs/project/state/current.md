@@ -79,6 +79,13 @@
 - Re-ran full backend suite: `975 passed, 8 skipped`.
 - Re-ran full backend suite after workspace safeguard alignment: `986 passed, 8 skipped`.
 - Completed Round-2 AtlasClaw vs OpenClaw context gap audit and published prioritized closure list at `docs/project/tasks/2026-04-06-openclaw-context-gap-audit.md`.
+- Completed built-in tool exclusion and script-execution scope alignment under the `docs/project` superpower-collaboration layout:
+  - added `skills.tools_exclusive`,
+  - scoped `skills.allow_script_execution` to built-in high-risk FS / exec tools,
+  - removed markdown/provider skill dependence on that flag,
+  - added `delete` to built-in registration and `group:fs`,
+  - aligned `/api/skills` visibility with registration-time exclusion,
+  - verified with targeted and full backend tests.
 
 ## In Progress
 - Context-management foundation is complete; now entering Round-2 parity closure for remaining P0/P1 gaps from the new audit.
@@ -96,6 +103,10 @@
 - Context alignment should prioritize runtime stability and observability first (guard/pruning/compaction), then move to optional capability parity.
 - Avoid coupling context management with hard-coded business heuristics; context policy should remain model- and runtime-driven.
 - Full backend suite currently has no failing tests in this workspace snapshot.
+- `docs/superpowers/specs/` is a historical design location and does not match the active superpower-collaboration project-memory layout.
+- New work should align to `docs/project/state/`, `docs/project/tasks/`, and `docs/project/specs/`.
+- For the built-in tool exclusion feature, markdown/provider skills must remain enabled by default; no new toggle should be introduced for them.
 
 ## Next Step
 - Execute `docs/superpowers/plans/2026-04-07-tool-skill-provider-minimal-toolset-implementation-plan.md` task-by-task with per-task double review and real-agent E2E timing report.
+- Continue the minimal-toolset/runtime alignment track from `docs/superpowers/plans/2026-04-07-tool-skill-provider-minimal-toolset-implementation-plan.md`.

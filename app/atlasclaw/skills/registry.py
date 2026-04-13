@@ -171,8 +171,6 @@ class SkillRegistry:
     def __init__(
         self,
         workspace: Optional[str] = None,
-        *,
-        allow_script_execution: bool = False,
     ):
         """Initialize the registry."""
         self._skills: dict[str, tuple[SkillMetadata, Callable]] = {}
@@ -180,7 +178,6 @@ class SkillRegistry:
         self._md_skill_tools: dict[str, set[str]] = {}
         self._md_tool_profiles: dict[str, dict[str, Any]] = {}
         self._workspace = workspace
-        self._allow_script_execution = allow_script_execution
     
     def register(
         self,
@@ -800,7 +797,6 @@ single MD Skill.
             entry=entry,
             skill_metadata_cls=SkillMetadata,
             logger=logger,
-            allow_script_execution=self._allow_script_execution,
         )
 
     @staticmethod

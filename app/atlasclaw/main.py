@@ -342,9 +342,7 @@ async def lifespan(app: FastAPI):
                 priority=handler_config.priority,
             )
         )
-    _skill_registry = SkillRegistry(
-        allow_script_execution=bool(config.skills.allow_script_execution)
-    )
+    _skill_registry = SkillRegistry()
     
     _global_provider_registry = ServiceProviderRegistry()
     _global_provider_registry.load_from_directory(providers_root)
@@ -383,7 +381,12 @@ async def lifespan(app: FastAPI):
             available_providers[provider_type] = instances
     
     # Register built-in tools (exec, read, write, web_search, etc.)
-    registered_tools = register_builtin_tools(_skill_registry, profile=ToolProfile.FULL)
+    registered_tools = register_builtin_tools(
+        _skill_registry,
+        profile=ToolProfile.FULL,
+        tools_exclusive=list(config.skills.tools_exclusive or []),
+        allow_script_execution=bool(config.skills.allow_script_execution),
+    )
     print(f"[AtlasClaw] Registered {len(registered_tools)} built-in tools")
     
     # Load skills from multiple sources (priority: workspace > global > built-in)

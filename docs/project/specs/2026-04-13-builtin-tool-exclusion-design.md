@@ -2,13 +2,14 @@
 
 ## Goal
 
-为 AtlasClaw 增加一组平台级内建工具开关，满足以下要求：
+为 AtlasClaw 增加一组平台级内建工具控制配置，满足以下要求：
 
 1. 通过反向排除配置控制内建 FS / runtime 工具是否在启动时注册。
 2. 默认不排除任何工具。
 3. `allow_script_execution` 仅对本地高风险文件与命令工具生效。
 4. 工具一旦被关闭，必须从运行时注册表、`/api/skills`、LLM 可见工具集、最小工具集过滤与执行链路中一并消失。
-5. 不引入运行时硬编码分支，不依赖额外 deny 补丁，不影响 provider executable skills 的现有执行语义。
+5. 不引入运行时硬编码分支，不依赖额外 deny 补丁。
+6. 不为 markdown skill / provider skill 增加任何新开关；它们默认保持开启。
 
 ## Scope
 
@@ -23,15 +24,15 @@
 
 ### Out of scope
 
-1. provider / markdown skills 的执行策略重设计。
+1. provider / markdown skills 的功能开关设计。
 2. 运行时 RBAC 或 policy pipeline 的新权限模型。
 3. 非内建工具的动态卸载。
 
 ## Current State
 
-当前代码存在两个问题：
+当前代码存在三个问题：
 
-1. `allow_script_execution` 被 `SkillRegistry` / `md_tool_runtime` 用作 markdown skill 脚本回退总开关，它的含义过宽，不适合作为本地 FS / exec 安全控制位。
+1. `allow_script_execution` 现在被用在比“本地 FS / exec 安全开关”更宽的范围上，语义不够清晰。
 2. 内建工具注册目前通过 `ToolCatalog -> register_builtin_tools()` 统一装载，但缺少一个启动时排除某些内建工具的配置层。
 3. `delete_tool.py` 已存在，但尚未进入 `_TOOL_REGISTRY` 和 `group:fs`，因此配置目标与实际可注册工具不完全一致。
 
@@ -83,7 +84,7 @@
 1. 这里把 `edit` 视为文件 CRUD 的一部分，因为它具有文件修改能力。
 2. `process` 不纳入该总开关，除非后续单独提出要求。
 3. `allow_script_execution=false` 时，上述工具即使未被 `tools_exclusive` 排除，也必须在注册前被统一剔除。
-4. `allow_script_execution` 不再承担 provider / markdown skill 脚本回退控制语义。
+4. markdown skill / provider skill 不新增任何开关，本次需求不改变它们默认开启的行为。
 
 ## Architecture Changes
 
@@ -193,16 +194,17 @@ profile tools
 5. `process` 在 `allow_script_execution=false` 下仍保留。
 6. `delete` 被纳入 `group:fs`。
 7. 运行时工具快照与 API 返回一致。
+8. markdown skill / provider skill 默认仍可用，不新增任何配置项。
 
 ## Risks and Guardrails
 
-### Risk 1: 误伤 provider executable skills
+### Risk 1: 误伤 markdown skill / provider skill
 
-如果直接复用旧的 `allow_script_execution` 语义而不收缩作用域，会把 SmartCMP / Jira 等 provider skills 一起关掉。
+如果把 `allow_script_execution` 当成“全平台脚本执行总开关”，会把本次需求错误扩大到非内建工具域。
 
 **Guardrail:**
 - `allow_script_execution` 只在 built-in registration 阶段生效。
-- markdown/provider skill 执行链不读取这个开关做拦截。
+- markdown/provider skill 不新增任何配置读取逻辑。
 
 ### Risk 2: group 排除与显式工具排除不一致
 
@@ -224,7 +226,7 @@ profile tools
 2. `skills.allow_script_execution` 仅控制本地高风险内建 FS / runtime 工具。
 3. `delete` 被完整纳入内建工具注册与 `group:fs`。
 4. 被排除工具不会出现在注册表、API、prompt、最小工具集、执行循环中。
-5. provider executable skills 不因本次变更失效。
+5. markdown skill / provider skill 默认保持开启，本次不新增它们的开关。
 6. 测试覆盖默认、单工具排除、组排除、安全总开关三类行为。
 
 ## Delivery Constraint

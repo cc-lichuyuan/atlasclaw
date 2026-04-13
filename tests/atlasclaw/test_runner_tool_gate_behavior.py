@@ -696,6 +696,110 @@ def test_tool_hint_docs_support_provider_metadata_recall() -> None:
     assert recalled["preferred_tool_names"] == ["smartcmp_get_request_detail"]
 
 
+def test_metadata_fallback_prefers_local_write_tool_over_generic_provider_create_hints() -> None:
+    runner = _GateRunner()
+    available_tools = [
+        {
+            "name": "write",
+            "description": "Write file content",
+            "source": "builtin",
+            "group_ids": ["group:fs", "group:atlasclaw"],
+            "capability_class": "fs_write",
+            "aliases": ["write file", "create file", "save file", "create text file"],
+            "keywords": ["write", "create", "file", "save", "content", "overwrite"],
+            "use_when": [
+                "User asks to create a local file or write text content to a file",
+            ],
+            "avoid_when": [],
+            "result_mode": "tool_only_ok",
+        },
+        {
+            "name": "smartcmp_submit_request",
+            "description": "Submit SmartCMP request",
+            "source": "provider",
+            "provider_type": "smartcmp",
+            "group_ids": ["group:cmp", "group:request"],
+            "capability_class": "provider:smartcmp",
+            "aliases": ["cmp request submit"],
+            "keywords": ["cmp", "request", "submit", "create"],
+            "use_when": ["User asks to create or submit a CMP request"],
+            "avoid_when": [],
+        },
+        {
+            "name": "jira_issue_create",
+            "description": "Create Jira issue",
+            "source": "provider",
+            "provider_type": "jira",
+            "group_ids": ["group:jira", "group:issue"],
+            "capability_class": "provider:jira",
+            "aliases": ["create jira issue"],
+            "keywords": ["jira", "issue", "ticket", "create"],
+            "use_when": ["User asks to create a Jira issue"],
+            "avoid_when": [],
+        },
+    ]
+
+    provider_hint_docs = [
+        {
+            "hint_id": "provider:smartcmp",
+            "provider_type": "smartcmp",
+            "display_name": "SmartCMP",
+            "description": "Manage SmartCMP requests and services",
+            "aliases": ["cmp"],
+            "keywords": ["cmp", "request", "submit", "create"],
+            "capabilities": ["provider:smartcmp"],
+            "use_when": ["User asks to create or submit a CMP request"],
+            "avoid_when": [],
+            "tool_names": ["smartcmp_submit_request"],
+            "group_ids": ["group:cmp", "group:request"],
+            "capability_classes": ["provider:smartcmp"],
+            "hint_text": "description: Manage SmartCMP requests and services | use_when: User asks to create or submit a CMP request",
+            "priority": 50,
+        },
+        {
+            "hint_id": "provider:jira",
+            "provider_type": "jira",
+            "display_name": "Jira",
+            "description": "Manage Jira issues",
+            "aliases": ["jira"],
+            "keywords": ["jira", "issue", "ticket", "create"],
+            "capabilities": ["provider:jira"],
+            "use_when": ["User asks to create a Jira issue"],
+            "avoid_when": [],
+            "tool_names": ["jira_issue_create"],
+            "group_ids": ["group:jira", "group:issue"],
+            "capability_classes": ["provider:jira"],
+            "hint_text": "description: Manage Jira issues | use_when: User asks to create a Jira issue",
+            "priority": 50,
+        },
+    ]
+    tool_hint_docs = runner._build_tool_hint_docs(available_tools=available_tools)
+    metadata = runner._recall_provider_skill_candidates_from_metadata(
+        user_message='create a file, which name is "test1.txt" and content is "hello ac"',
+        recent_history=[
+            {"role": "user", "content": "CMP里面有多少待审批的"},
+            {"role": "assistant", "content": "我帮你列出来。"},
+        ],
+        used_follow_up_context=False,
+        available_tools=available_tools,
+        provider_hint_docs=provider_hint_docs,
+        skill_hint_docs=[],
+        tool_hint_docs=tool_hint_docs,
+        top_k_provider=2,
+        top_k_skill=2,
+    )
+    plan = runner._build_metadata_fallback_tool_intent_plan(
+        metadata_candidates=metadata,
+        available_tools=available_tools,
+    )
+
+    assert plan is not None
+    assert plan.action is ToolIntentAction.USE_TOOLS
+    assert plan.target_tool_names == ["write"]
+    assert plan.target_provider_types == []
+    assert plan.target_capability_classes == ["fs_write"]
+
+
 def test_metadata_fallback_builds_weather_plan_from_builtin_tool_candidates() -> None:
     runner = _GateRunner()
     available_tools = [

@@ -461,7 +461,7 @@ class TestSkillRegistryMdLoading:
         assert "description" not in entry_meta
 
     def test_script_backed_md_tool_disabled_by_default(self, tmp_path):
-        """Script-backed markdown tools should not register unless explicitly enabled."""
+        """Script-backed markdown tools should register by default."""
         skill_dir = tmp_path / "script-skill"
         _write_skill_md(
             skill_dir / "SKILL.md",
@@ -477,7 +477,7 @@ class TestSkillRegistryMdLoading:
         reg = SkillRegistry()
         reg.load_from_directory(str(tmp_path), location="workspace")
 
-        assert reg.get("script_tool") is None
+        assert reg.get("script_tool") is not None
 
     def test_explicit_python_handler_md_tool_still_registers(self, tmp_path):
         """Explicit callable handlers remain available without script execution."""
@@ -736,6 +736,7 @@ class TestConfigSchema:
         assert cfg.md_skills_desc_max_chars == 200
         assert cfg.md_skills_index_max_chars == 3000
         assert cfg.md_skills_max_file_bytes == 262144
+        assert cfg.tools_exclusive == []
         assert cfg.allow_script_execution is True
 
     def test_custom_values(self):
@@ -743,9 +744,11 @@ class TestConfigSchema:
         cfg = SkillsConfig(
             md_skills_max_count=50,
             md_skills_max_file_bytes=524288,
+            tools_exclusive=["read"],
         )
         assert cfg.md_skills_max_count == 50
         assert cfg.md_skills_max_file_bytes == 524288
+        assert cfg.tools_exclusive == ["read"]
 
     def test_atlasclaw_config_integration(self):
         """AtlasClawConfig 集成验证"""
@@ -763,13 +766,13 @@ class TestBuiltinToolCatalog:
     def test_full_profile_includes_runtime_and_fs_tools(self):
         tools = ToolCatalog.get_tools_by_profile(ToolProfile.FULL)
 
-        for tool_name in ("read", "write", "edit", "exec", "process"):
+        for tool_name in ("read", "write", "edit", "delete", "exec", "process"):
             assert tool_name in tools
 
     def test_register_builtin_tools_includes_runtime_and_fs_tools(self):
         reg = SkillRegistry()
         registered = register_builtin_tools(reg, profile=ToolProfile.FULL)
 
-        for tool_name in ("read", "write", "edit", "exec", "process"):
+        for tool_name in ("read", "write", "edit", "delete", "exec", "process"):
             assert tool_name in registered
             assert reg.get(tool_name) is not None

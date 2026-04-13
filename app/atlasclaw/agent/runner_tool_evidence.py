@@ -343,17 +343,21 @@ class RunnerToolEvidenceMixin:
 
     @staticmethod
     def _strip_tool_answer_wrapper(text: str) -> str:
-        normalized = str(text or "").replace("\r\n", "\n").lstrip()
+        normalized = str(text or "").replace("\r\n", "\n").lstrip("\ufeff\u200b\u200c\u200d \t\r\n")
         if not normalized:
             return ""
-        lines = normalized.split("\n")
-        first_line = (lines[0] or "").strip()
-        second_line = (lines[1] or "").strip() if len(lines) > 1 else ""
         wrapper_pattern = re.compile(r"^(answer|result|response|回答|结果|回复)\s*[:：-]?$", re.IGNORECASE)
-        if wrapper_pattern.fullmatch(first_line) and re.fullmatch(r"=+", second_line):
-            return "\n".join(lines[2:]).lstrip()
-        if wrapper_pattern.fullmatch(first_line):
-            return "\n".join(lines[1:]).lstrip()
+        while normalized:
+            lines = normalized.split("\n")
+            first_line = (lines[0] or "").strip()
+            second_line = (lines[1] or "").strip() if len(lines) > 1 else ""
+            if wrapper_pattern.fullmatch(first_line) and re.fullmatch(r"=+\s*", second_line):
+                normalized = "\n".join(lines[2:]).lstrip("\ufeff\u200b\u200c\u200d \t\r\n")
+                continue
+            if wrapper_pattern.fullmatch(first_line):
+                normalized = "\n".join(lines[1:]).lstrip("\ufeff\u200b\u200c\u200d \t\r\n")
+                continue
+            break
         return normalized
 
     def _normalize_ascii_tool_output_to_markdown(self, text: str) -> str:
@@ -393,7 +397,7 @@ class RunnerToolEvidenceMixin:
                 markdown_lines.append(f"### {header_text}")
                 previous_blank = False
                 continue
-            pipe_field_match = re.fullmatch(r"\|\s*(.+?)\s*:\s*(.+)", stripped)
+            pipe_field_match = re.fullmatch(r"\|\s*(.+?)\s*[:：]\s*(.+)", stripped)
             if pipe_field_match:
                 field_name = " ".join(pipe_field_match.group(1).split()).strip()
                 field_value = " ".join(pipe_field_match.group(2).split()).strip()

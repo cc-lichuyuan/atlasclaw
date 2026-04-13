@@ -40,8 +40,6 @@ def load_handler_from_file(
     py_file: Path,
     attr_name: str,
     provider_type: Optional[str] = None,
-    *,
-    allow_script_execution: bool = False,
     invocation_config: Optional[ScriptInvocationConfig] = None,
 ) -> Callable:
     """Load callable handler from file or fallback to script wrapper."""
@@ -53,8 +51,6 @@ def load_handler_from_file(
 
     try:
         if attr_name == "handler":
-            if not allow_script_execution:
-                raise RuntimeError("script-backed markdown tools are disabled")
             return create_script_wrapper(
                 py_file,
                 provider_type,
@@ -73,8 +69,6 @@ def load_handler_from_file(
         handler = getattr(module, attr_name, None)
         if handler is not None and callable(handler):
             return handler
-        if not allow_script_execution:
-            raise RuntimeError("script-backed markdown tools are disabled")
         return create_script_wrapper(
             py_file,
             provider_type,
@@ -210,7 +204,6 @@ def register_executable_tools_from_md(
     entry: Any,
     skill_metadata_cls: Any,
     logger: Any,
-    allow_script_execution: bool = False,
 ) -> None:
     """Register executable tools declared in markdown skill metadata."""
     skill_dir = Path(entry.file_path).parent
@@ -231,7 +224,6 @@ def register_executable_tools_from_md(
             entry=entry,
             skill_dir=skill_dir,
             registered=registered,
-            allow_script_execution=allow_script_execution,
         )
 
     ids: set[str] = set()
@@ -264,7 +256,6 @@ def register_executable_tools_from_md(
             entry=entry,
             skill_dir=skill_dir,
             registered=registered,
-            allow_script_execution=allow_script_execution,
         )
 
     if registered:
@@ -283,7 +274,6 @@ def _register_md_tool_entry(
     registered: set[str],
     tool_description: str = "",
     tool_id: str = "",
-    allow_script_execution: bool = False,
 ) -> None:
     module_path, attr_name = parse_entrypoint(entrypoint)
     py_file = (skill_dir / module_path).resolve()
@@ -298,20 +288,12 @@ def _register_md_tool_entry(
 
     metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
     provider_type = str(metadata.get("provider_type", "")).strip() or entry.provider or None
-    if not allow_script_execution and attr_name == "handler":
-        logger.info(
-            "Skipping md tool %s from %s: script-backed markdown tools are disabled by default",
-            tool_name,
-            entry.name,
-        )
-        return
     try:
         invocation_config = _extract_script_invocation_config(metadata, tool_id=tool_id)
         handler = load_handler_from_file(
             py_file,
             attr_name,
             provider_type,
-            allow_script_execution=allow_script_execution,
             invocation_config=invocation_config,
         )
     except Exception as exc:

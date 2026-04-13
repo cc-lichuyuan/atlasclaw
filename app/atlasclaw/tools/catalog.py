@@ -21,7 +21,7 @@ GROUP_PROVIDERS = "group:providers"
 # Tools included in each logical group.
 GROUP_TOOLS: dict[str, list[str]] = {
     GROUP_RUNTIME: ["exec", "process"],
-    GROUP_FS: ["read", "write", "edit"],
+    GROUP_FS: ["read", "write", "edit", "delete"],
     GROUP_WEB: ["web_search", "web_fetch", "openmeteo_weather"],
     GROUP_UI: ["browser"],
     GROUP_AUTOMATION: [],

@@ -20,6 +20,15 @@ _TOOL_REGISTRY: dict[str, tuple[ToolMetadata, str, str]] = {
             description="Execute shell command",
             group="runtime",
             planner_visibility="contextual",
+            aliases=["run command", "execute command", "shell command", "terminal command"],
+            keywords=["exec", "run", "command", "shell", "terminal", "script"],
+            use_when=[
+                "User asks to execute a local shell command or script",
+                "A workspace task requires running a command in the local environment",
+            ],
+            avoid_when=[
+                "A safer dedicated tool can satisfy the request without local command execution",
+            ],
         ),
         "app.atlasclaw.tools.runtime.exec_tool",
         "exec_tool",
@@ -30,6 +39,15 @@ _TOOL_REGISTRY: dict[str, tuple[ToolMetadata, str, str]] = {
             description="Manage long-running process",
             group="runtime",
             planner_visibility="contextual",
+            aliases=["manage process", "background process", "check process"],
+            keywords=["process", "background", "pid", "status", "stop", "restart"],
+            use_when=[
+                "User asks to inspect or manage a long-running local process",
+                "A previously started background command needs status or lifecycle management",
+            ],
+            avoid_when=[
+                "The task only needs a one-shot command execution",
+            ],
         ),
         "app.atlasclaw.tools.runtime.process_tool",
         "process_tool",
@@ -41,6 +59,15 @@ _TOOL_REGISTRY: dict[str, tuple[ToolMetadata, str, str]] = {
             description="Read file content",
             group="fs",
             planner_visibility="contextual",
+            aliases=["read file", "open file", "show file", "view file"],
+            keywords=["read", "file", "open", "show", "view", "content"],
+            use_when=[
+                "User asks to inspect or read a local file",
+                "A workspace task needs file contents before analysis or editing",
+            ],
+            avoid_when=[
+                "The task only needs filesystem metadata without reading content",
+            ],
         ),
         "app.atlasclaw.tools.filesystem.read_tool",
         "read_tool",
@@ -51,6 +78,16 @@ _TOOL_REGISTRY: dict[str, tuple[ToolMetadata, str, str]] = {
             description="Write file content",
             group="fs",
             planner_visibility="contextual",
+            aliases=["write file", "create file", "save file", "create text file"],
+            keywords=["write", "create", "file", "save", "content", "overwrite"],
+            use_when=[
+                "User asks to create a local file or write text content to a file",
+                "A workspace task requires saving generated content into a file",
+            ],
+            avoid_when=[
+                "The task should modify an existing file incrementally instead of replacing it",
+            ],
+            result_mode="tool_only_ok",
         ),
         "app.atlasclaw.tools.filesystem.write_tool",
         "write_tool",
@@ -61,9 +98,38 @@ _TOOL_REGISTRY: dict[str, tuple[ToolMetadata, str, str]] = {
             description="Edit file by string replacement",
             group="fs",
             planner_visibility="contextual",
+            aliases=["edit file", "replace in file", "update file"],
+            keywords=["edit", "replace", "update", "modify", "file"],
+            use_when=[
+                "User asks to update an existing local file without rewriting it from scratch",
+                "A workspace task requires targeted text replacement in a file",
+            ],
+            avoid_when=[
+                "The task should create a brand-new file instead of editing an existing one",
+            ],
+            result_mode="tool_only_ok",
         ),
         "app.atlasclaw.tools.filesystem.edit_tool",
         "edit_tool",
+    ),
+    "delete": (
+        ToolMetadata(
+            name="delete",
+            description="Delete a file from disk",
+            group="fs",
+            planner_visibility="contextual",
+            aliases=["delete file", "remove file"],
+            keywords=["delete", "remove", "file"],
+            use_when=[
+                "User explicitly asks to delete or remove a local file",
+            ],
+            avoid_when=[
+                "The task only needs to clear or replace file contents without deleting the file",
+            ],
+            result_mode="tool_only_ok",
+        ),
+        "app.atlasclaw.tools.filesystem.delete_tool",
+        "delete_file_tool",
     ),
     "browser": (
         ToolMetadata(
@@ -304,6 +370,12 @@ def _resolve_builtin_group_ids(tool_meta: ToolMetadata) -> list[str]:
 
 def _resolve_builtin_capability_class(tool_name: str, tool_meta: ToolMetadata) -> str:
     explicit_by_name = {
+        "exec": "runtime_exec",
+        "process": "runtime_process",
+        "read": "fs_read",
+        "write": "fs_write",
+        "edit": "fs_edit",
+        "delete": "fs_delete",
         "web_search": "web_search",
         "web_fetch": "web_fetch",
         "openmeteo_weather": "weather",
@@ -327,6 +399,8 @@ def register_builtin_tools(
     profile: str | ToolProfile = ToolProfile.FULL,
     allow: Optional[list[str]] = None,
     deny: Optional[list[str]] = None,
+    tools_exclusive: Optional[list[str]] = None,
+    allow_script_execution: bool = True,
 ) -> list[str]:
     """Register built-in tools into the skill registry.
 
@@ -344,6 +418,13 @@ def register_builtin_tools(
 
     # Apply allow/deny filtering on top of the profile selection.
     filtered_tools = ToolCatalog.filter_tools(profile_tools, allow=allow, deny=deny)
+    if tools_exclusive:
+        filtered_tools = ToolCatalog.filter_tools(filtered_tools, deny=list(tools_exclusive))
+    if not allow_script_execution:
+        filtered_tools = ToolCatalog.filter_tools(
+            filtered_tools,
+            deny=["read", "write", "edit", "delete", "exec"],
+        )
 
     registered: list[str] = []
     for tool_name in filtered_tools:

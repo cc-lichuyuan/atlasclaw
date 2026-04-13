@@ -27,14 +27,14 @@ def test_group_map_contains_required_openclaw_aligned_groups() -> None:
 
 def test_required_group_membership_is_defined() -> None:
     assert {"exec", "process"}.issubset(set(GROUP_TOOLS[GROUP_RUNTIME]))
-    assert {"read", "write", "edit"}.issubset(set(GROUP_TOOLS[GROUP_FS]))
+    assert {"read", "write", "edit", "delete"}.issubset(set(GROUP_TOOLS[GROUP_FS]))
     assert {"web_search", "web_fetch"}.issubset(set(GROUP_TOOLS[GROUP_WEB]))
     assert {"browser"}.issubset(set(GROUP_TOOLS[GROUP_UI]))
 
 
 def test_atlasclaw_group_is_union_of_core_builtin_tools() -> None:
     atlasclaw_group = set(GROUP_TOOLS[GROUP_ATLASCLAW])
-    assert {"exec", "process", "read", "write", "edit"}.issubset(atlasclaw_group)
+    assert {"exec", "process", "read", "write", "edit", "delete"}.issubset(atlasclaw_group)
     assert {"web_search", "web_fetch", "session_status"}.issubset(atlasclaw_group)
 
 
@@ -48,7 +48,7 @@ def test_expand_groups_dedupes_tools_and_ignores_unknown_groups() -> None:
 
 def test_full_profile_resolves_to_atlasclaw_tool_union() -> None:
     tools = ToolCatalog.get_tools_by_profile(ToolProfile.FULL)
-    for required in ("exec", "process", "read", "write", "edit", "web_search", "web_fetch"):
+    for required in ("exec", "process", "read", "write", "edit", "delete", "web_search", "web_fetch"):
         assert required in tools
 
 

@@ -121,3 +121,5 @@ def test_register_builtin_tools_exposes_explicit_runtime_metadata() -> None:
         GROUP_CATALOG,
         GROUP_ATLASCLAW,
     }
+    assert tools["delete"]["source"] == "builtin"
+    assert set(tools["delete"]["group_ids"]) == {"group:fs", GROUP_ATLASCLAW}

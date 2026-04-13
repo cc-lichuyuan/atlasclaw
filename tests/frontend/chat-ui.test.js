@@ -1059,6 +1059,107 @@ describe('chat-ui.js handler mode', () => {
         await handlerPromise;
     });
 
+    test('handler hides reasoning completed terminal row when final answer is present', async () => {
+        const { initChat } = await import('../../app/frontend/scripts/chat-ui.js');
+        const element = createChatElement();
+        const signals = createMockSignals();
+
+        global.fetch.mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ session_key: 'session-123' })
+        }).mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({})
+        });
+
+        await initChat(element);
+        global.fetch.mockClear();
+
+        global.fetch.mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ run_id: 'run-hide-completed-row' })
+        });
+
+        const handlerPromise = element.handler(
+            { messages: [{ text: 'cmp pending', role: 'user' }] },
+            signals
+        );
+
+        await new Promise(r => setTimeout(r, 100));
+        const stream = MockEventSource.instances[0];
+        stream.simulateEvent('assistant', {
+            text: '### 列表\n- 第一项',
+            is_delta: true
+        });
+        stream.simulateEvent('runtime', {
+            state: 'reasoning',
+            message: 'Reasoning phase completed.',
+            elapsed: 5.0
+        });
+        stream.simulateEvent('runtime', {
+            state: 'answered',
+            message: 'Final answer ready.',
+            elapsed: 5.1
+        });
+
+        await new Promise(r => setTimeout(r, 120));
+
+        const htmlPayload = signals.onResponse.mock.calls.at(-1)?.[0]?.html || '';
+        expect(htmlPayload).not.toContain('Reasoning phase completed.');
+        expect(htmlPayload).not.toContain('Answered');
+        expect(htmlPayload).toContain('<h3>列表</h3>');
+
+        stream.simulateEvent('lifecycle', { phase: 'end' });
+        await handlerPromise;
+    });
+
+    test('handler normalizes ascii tool output with wrapper heading and pipe fields', async () => {
+        const { initChat } = await import('../../app/frontend/scripts/chat-ui.js');
+        const element = createChatElement();
+        const signals = createMockSignals();
+
+        global.fetch.mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ session_key: 'session-123' })
+        }).mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({})
+        });
+
+        await initChat(element);
+        global.fetch.mockClear();
+
+        global.fetch.mockResolvedValueOnce({
+            ok: true,
+            json: () => Promise.resolve({ run_id: 'run-ascii-pending-output' })
+        });
+
+        const handlerPromise = element.handler(
+            { messages: [{ text: 'cmp pending', role: 'user' }] },
+            signals
+        );
+
+        await new Promise(r => setTimeout(r, 100));
+        const stream = MockEventSource.instances[0];
+        stream.simulateEvent('assistant', {
+            text: '\uFEFFAnswer\n=====\n待审批列表 - 共 2 项（按优先级排序）\n==================\n+- [1] 高 --------\n| 名称：Test ticket for build verification\n| 工单号: TIC20260316000001\n|\n+- [2] 高 --------\n| 名称: 加急加急\n| 工单号：TIC20260313000006',
+            is_delta: true
+        });
+        await new Promise(r => setTimeout(r, 160));
+
+        const htmlPayload = signals.onResponse.mock.calls.at(-1)?.[0]?.html || '';
+        expect(htmlPayload).not.toContain('>Answer<');
+        expect(htmlPayload).not.toContain('=====');
+        expect(htmlPayload).toContain('<h1>待审批列表 - 共 2 项（按优先级排序）</h1>');
+        expect(htmlPayload).toContain('<li>名称: Test ticket for build verification</li>');
+        expect(htmlPayload).toContain('<li>工单号: TIC20260316000001</li>');
+        expect(htmlPayload).toContain('<li>名称: 加急加急</li>');
+        expect(htmlPayload).toContain('<li>工单号: TIC20260313000006</li>');
+
+        stream.simulateEvent('lifecycle', { phase: 'end' });
+        await handlerPromise;
+    });
+
     test('handler advances waiting-for-tool-decision progress locally without heartbeat', async () => {
         jest.useFakeTimers();
         try {

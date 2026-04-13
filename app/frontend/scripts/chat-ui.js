@@ -3,11 +3,11 @@
  * Configure DeepChat component integration with AtlasClaw API
  */
 
-import { getSessionKey, initSession, setSessionKey } from './session-manager.js?v=18'
-import { getAgentInfo, getSessionHistory } from './api-client.js?v=18'
-import { createStreamHandler } from './stream-handler.js?v=18'
-import { buildApiUrl } from './config.js?v=18'
-import { t, isLocaleLoaded, getCurrentLocale } from './i18n.js?v=18'
+import { getSessionKey, initSession, setSessionKey } from './session-manager.js?v=19'
+import { getAgentInfo, getSessionHistory } from './api-client.js?v=19'
+import { createStreamHandler } from './stream-handler.js?v=19'
+import { buildApiUrl } from './config.js?v=19'
+import { t, isLocaleLoaded, getCurrentLocale } from './i18n.js?v=19'
 
 let chatElement = null
 let currentStreamHandler = null
@@ -548,7 +548,11 @@ function buildRuntimePanel(runtimeEntries, thinkingContent, elapsedMs = null, is
   }
   const hasAnswered = !!isComplete
   const hasFailed = visibleEntries.some((entry) => entry.state === 'failed')
-  const displayEntries = visibleEntries.filter((entry) => entry.state !== 'answered' && entry.state !== 'answering')
+  const displayEntries = visibleEntries.filter((entry) => (
+    entry.state !== 'answered' &&
+    entry.state !== 'answering' &&
+    String(entry.message || '').trim() !== 'Reasoning phase completed.'
+  ))
   const chipEntries = displayEntries.filter((entry, index) => {
     if (index === 0) return true
     return entry.state !== displayEntries[index - 1].state
@@ -630,24 +634,33 @@ function sanitizeLinkUrl(url) {
 }
 
 function stripWrapperHeading(text) {
-  const normalized = String(text || '').replace(/\r\n/g, '\n').replace(/^\s+/, '')
+  let normalized = String(text || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/^[\uFEFF\u200B\u200C\u200D\s]+/, '')
   if (!normalized.trim()) return ''
-  const lines = normalized.split('\n')
-  const firstLine = (lines[0] || '').trim()
-  const secondLine = (lines[1] || '').trim()
   const wrapperPattern = /^(answer|result|response|回答|结果|回复)\s*[:：-]?$/i
 
-  if (wrapperPattern.test(firstLine) && /^=+$/.test(secondLine)) {
-    return lines.slice(2).join('\n').replace(/^\s+/, '')
-  }
-  if (/^#{1,3}\s+/.test(firstLine)) {
-    const headingText = firstLine.replace(/^#{1,3}\s+/, '').trim()
-    if (wrapperPattern.test(headingText)) {
-      return lines.slice(1).join('\n').replace(/^\s+/, '')
+  while (normalized.trim()) {
+    const lines = normalized.split('\n')
+    const firstLine = (lines[0] || '').trim()
+    const secondLine = (lines[1] || '').trim()
+
+    if (wrapperPattern.test(firstLine) && /^=+\s*$/.test(secondLine)) {
+      normalized = lines.slice(2).join('\n').replace(/^[\uFEFF\u200B\u200C\u200D\s]+/, '')
+      continue
     }
-  }
-  if (wrapperPattern.test(firstLine)) {
-    return lines.slice(1).join('\n').replace(/^\s+/, '')
+    if (/^#{1,3}\s+/.test(firstLine)) {
+      const headingText = firstLine.replace(/^#{1,3}\s+/, '').trim()
+      if (wrapperPattern.test(headingText)) {
+        normalized = lines.slice(1).join('\n').replace(/^[\uFEFF\u200B\u200C\u200D\s]+/, '')
+        continue
+      }
+    }
+    if (wrapperPattern.test(firstLine)) {
+      normalized = lines.slice(1).join('\n').replace(/^[\uFEFF\u200B\u200C\u200D\s]+/, '')
+      continue
+    }
+    break
   }
   return normalized
 }
@@ -753,6 +766,26 @@ function renderAssistantMarkdown(text) {
         listType = 'ol'
       }
       htmlParts.push(`<li>${renderInlineMarkdown(olMatch[1])}</li>`)
+      continue
+    }
+
+    const pipeFieldMatch = /^\|\s*(.+?)\s*[:：]\s*(.+)$/.exec(line)
+    if (pipeFieldMatch) {
+      flushParagraph()
+      if (listType !== 'ul') {
+        flushList()
+        htmlParts.push('<ul>')
+        listType = 'ul'
+      }
+      htmlParts.push(
+        `<li>${renderInlineMarkdown(`${pipeFieldMatch[1]}: ${pipeFieldMatch[2]}`)}</li>`
+      )
+      continue
+    }
+
+    if (/^[=+\-|]{8,}\s*$/.test(line) || line === '|') {
+      flushParagraph()
+      flushList()
       continue
     }
 

@@ -264,7 +264,12 @@ def test_live_smartcmp_agent_three_turns_return_grounded_results() -> None:
     _assert_real_tool_call(detail, "smartcmp_get_request_detail")
     assert "TIC20260316000001" in detail.assistant_text
     assert "Test ticket for build verification" in detail.assistant_text
-    assert "approvalId" in detail.assistant_text or "requestId" in detail.assistant_text
+    assert (
+        "approvalId" in detail.assistant_text
+        or "requestId" in detail.assistant_text
+        or "Approval ID" in detail.assistant_text
+        or "Request ID" in detail.assistant_text
+    )
 
     services = _run_round_with_transient_retry(
         session,

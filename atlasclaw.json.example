@@ -28,6 +28,11 @@
 
   "skills_root": "../atlasclaw-providers/skills",
   "channels_root": "../atlasclaw-providers/channels",
+  "skills": {
+    "_comment": "Built-in tool registration controls. tools_exclusive removes named built-in tools or groups at startup. allow_script_execution controls local high-risk file/exec built-ins only.",
+    "tools_exclusive": [],
+    "allow_script_execution": true
+  },
 
   "model": {
     "_comment": "Token pool configuration for multi-token LLM access. Set reasoning: true for models that support thinking/reasoning output.",
