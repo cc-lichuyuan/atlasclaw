@@ -5,6 +5,9 @@ import pytest
 
 from app.atlasclaw.agent.runner_tool.runner_tool_gate_model import RunnerToolGateModelMixin
 from app.atlasclaw.agent.runner_tool.runner_execution_prepare import RunnerExecutionPreparePhaseMixin
+from app.atlasclaw.agent.runner_tool.runner_execution_prepare import (
+    build_recent_follow_up_tool_intent_plan,
+)
 from app.atlasclaw.agent.runner_tool.runner_llm_routing import build_llm_first_guidance_plan
 from app.atlasclaw.agent.runner_tool.runner_tool_gate_routing import RunnerToolGateRoutingMixin
 from app.atlasclaw.agent.runner_tool.runner_tool_projection import project_minimal_toolset
@@ -435,6 +438,44 @@ def test_resolve_contextual_tool_request_keeps_rich_identifier_query_self_contai
 
     assert resolved == "我要看下TIC20260316000001的详情"
     assert used_follow_up_context is False
+
+
+def test_resolve_contextual_tool_request_reuses_previous_user_message_for_low_information_follow_up() -> None:
+    runner = _GateRunner()
+
+    resolved, used_follow_up_context = runner._resolve_contextual_tool_request(
+        user_message="上海呢",
+        recent_history=[
+            {"role": "user", "content": "明天北京天气呢"},
+            {"role": "assistant", "content": "Weather for 北京市, 北京, 中国\nDaily forecast:\n| 2026-04-15 | Slight rain showers |"},
+        ],
+    )
+
+    assert resolved == "明天北京天气呢\n上海呢"
+    assert used_follow_up_context is True
+
+
+def test_build_recent_follow_up_tool_intent_plan_reuses_single_recent_tool() -> None:
+    plan = build_recent_follow_up_tool_intent_plan(
+        recent_history=[
+            {"role": "user", "content": "明天北京天气呢"},
+            {"role": "assistant", "content": "我来查一下。", "tool_calls": [{"name": "openmeteo_weather"}]},
+            {"role": "tool", "tool_name": "openmeteo_weather", "content": {"ok": True}},
+            {"role": "assistant", "content": "Weather for 北京市, 北京, 中国"},
+        ],
+        available_tools=[
+            {
+                "name": "openmeteo_weather",
+                "description": "Get weather forecast",
+                "capability_class": "weather",
+            }
+        ],
+    )
+
+    assert plan is not None
+    assert plan.action is ToolIntentAction.USE_TOOLS
+    assert plan.target_tool_names == ["openmeteo_weather"]
+    assert plan.target_capability_classes == ["weather"]
 
 
 def test_metadata_recall_ignores_history_when_not_follow_up() -> None:

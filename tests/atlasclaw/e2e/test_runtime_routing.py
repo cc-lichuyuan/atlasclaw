@@ -384,6 +384,28 @@ def _extract_previous_assistant_text(messages: list[ModelMessage]) -> str:
     return "\n".join(reversed(fallback_chunks)).strip()
 
 
+def _history_contains_weather_context(messages: list[ModelMessage]) -> bool:
+    """Return whether recent conversation history already contains a weather exchange."""
+    history_text = "\n".join(
+        chunk
+        for chunk in [
+            _extract_previous_assistant_text(messages),
+            "\n".join(
+                part.content.strip()
+                for part in _iter_message_parts(messages)
+                if isinstance(part, UserPromptPart)
+                and isinstance(part.content, str)
+                and part.content.strip()
+            ),
+        ]
+        if chunk
+    ).strip()
+    if not history_text:
+        return False
+    lowered = history_text.lower()
+    return "weather for" in lowered or "天气" in history_text or "forecast" in lowered
+
+
 def _extract_latest_tool_return(messages: list[ModelMessage]) -> Optional[ToolReturnPart]:
     """Find a tool return on the most recent ModelRequest only."""
     latest_request = _latest_model_request(messages)
@@ -531,6 +553,9 @@ def _decide_model_action(messages: list[ModelMessage], agent_info: AgentInfo) ->
     if "天气" in user_text:
         _require_tool(available_tools, "openmeteo_weather", user_text)
         return "tool", "openmeteo_weather", {"location": "上海", "days": 2}, "call-weather-1"
+    if user_text == "上海呢" and _history_contains_weather_context(messages):
+        _require_tool(available_tools, "openmeteo_weather", user_text)
+        return "tool", "openmeteo_weather", {"location": "上海", "days": 2}, "call-weather-follow-up-1"
     if "骑行公园" in user_text:
         return "text", _direct_park_answer()
     if "PPT" in user_text.upper():
@@ -755,6 +780,20 @@ def test_weather_query_runs_real_agent_loop(agent_harness: AgentHarness) -> None
     assert "26.0°C" in outcome.assistant_text
     assert "18.0kmh" in outcome.assistant_text
     assert outcome.runtime_states.count("reasoning") >= 2
+
+
+def test_weather_follow_up_short_location_reuses_context_and_runs_weather_tool(
+    agent_harness: AgentHarness,
+) -> None:
+    session_key = agent_harness.create_thread()
+    first = _run_round(agent_harness, "明天北京天气呢", session_key)
+    _assert_completed(first)
+    assert first.tool_starts == ["openmeteo_weather"]
+
+    second = _run_round(agent_harness, "上海呢", session_key)
+    _assert_completed(second)
+    assert second.tool_starts == ["openmeteo_weather"]
+    assert "Shanghai" in second.assistant_text or "上海" in second.assistant_text
 
 
 def test_public_park_query_answers_directly_without_tool(agent_harness: AgentHarness) -> None:

@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from pydantic_ai.messages import ToolCallPart
 
+from app.atlasclaw.agent.plaintext_tool_calls import parse_plaintext_tool_calls
 from app.atlasclaw.agent.tool_gate_models import CapabilityMatchResult, ToolEnforcementOutcome, ToolGateDecision
 from app.atlasclaw.agent.stream import StreamEvent
 from app.atlasclaw.core.trace import resolve_trace_context, sanitize_log_value
@@ -507,6 +508,25 @@ class RuntimeEventDispatcher:
         if hasattr(node, "tool_name"):
             return [{"name": str(node.tool_name)}]
         return []
+
+    def collect_plaintext_tool_calls(self, node: Any) -> list[dict[str, Any]]:
+        """Collect text-form tool call attempts such as DSML markup from a node."""
+        text_fragments: list[str] = []
+
+        model_response = getattr(node, "model_response", None)
+        response_parts = getattr(model_response, "parts", None) or []
+        for part in response_parts:
+            text_content = getattr(part, "content", None) or getattr(part, "text", None)
+            if text_content:
+                text_fragments.append(str(text_content))
+
+        node_content = getattr(node, "content", None)
+        if node_content:
+            text_fragments.append(str(node_content))
+
+        if not text_fragments:
+            return []
+        return parse_plaintext_tool_calls("\n".join(text_fragments))
 
     @staticmethod
     def _normalize_tool_call(tool_call: Any) -> dict[str, Any] | None:

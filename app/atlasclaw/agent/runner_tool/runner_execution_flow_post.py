@@ -5,6 +5,7 @@ import logging
 import time
 from typing import Any, AsyncIterator
 
+from app.atlasclaw.agent.plaintext_tool_calls import looks_like_plaintext_tool_call_attempt
 from app.atlasclaw.agent.runner_tool.runner_execution_payload import (
     build_direct_answer_recovery_payload,
     build_tool_failure_fallback_payload,
@@ -283,19 +284,7 @@ class RunnerExecutionFlowPostMixin:
 
     @staticmethod
     def _looks_like_plaintext_tool_call_attempt(text: str) -> bool:
-        normalized = str(text or "").strip().lower()
-        if not normalized:
-            return False
-        suspicious_markers = (
-            "<tool_call",
-            "</tool_call",
-            "<web_search",
-            "<web_fetch",
-            "<browser",
-            "<function_call",
-            "</think>",
-        )
-        return any(marker in normalized for marker in suspicious_markers)
+        return looks_like_plaintext_tool_call_attempt(text)
 
     async def _generate_direct_answer_recovery_answer(
         self,
@@ -614,6 +603,77 @@ class RunnerExecutionFlowPostMixin:
                     "direct_answer_recovery_done",
                     answered=bool(final_assistant.strip()),
                 )
+
+        plaintext_tool_markup_attempt = bool(
+            state.get("available_tools")
+            and final_assistant
+            and self._looks_like_plaintext_tool_call_attempt(final_assistant)
+            and not any(
+                isinstance(message, dict)
+                and (
+                    str(message.get("role", "") or "").strip().lower() in {"tool", "toolresult", "tool_result"}
+                    or (
+                        isinstance(message.get("tool_results"), list)
+                        and bool(message.get("tool_results"))
+                    )
+                )
+                for message in final_messages[persist_run_output_start_index:]
+            )
+        )
+        if plaintext_tool_markup_attempt:
+            preferred_tools = [
+                str(item.get("name", "") or "").strip()
+                for item in tool_call_summaries
+                if isinstance(item, dict) and str(item.get("name", "") or "").strip()
+            ]
+            yield StreamEvent.runtime_update(
+                "warning",
+                "Model returned plaintext tool-call markup instead of a real tool call.",
+                metadata={
+                    "phase": "plaintext_tool_call_retry",
+                    "attempt": current_model_attempt,
+                    "elapsed": round(time.monotonic() - start_time, 1),
+                    "preferred_tools": preferred_tools,
+                },
+            )
+            yield StreamEvent.runtime_update(
+                "reasoning",
+                "Retrying once with stricter structured tool-execution guidance.",
+                metadata={
+                    "phase": "plaintext_tool_call_retry",
+                    "attempt": current_model_attempt,
+                    "elapsed": round(time.monotonic() - start_time, 1),
+                    "preferred_tools": preferred_tools,
+                },
+            )
+            plaintext_tool_retry_started = False
+            async for retry_event in self._retry_after_missing_tool_execution(
+                session_key=session_key,
+                user_message=user_message,
+                deps=deps,
+                release_slot=release_slot,
+                selected_token_id=selected_token_id,
+                start_time=start_time,
+                max_tool_calls=max_tool_calls,
+                timeout_seconds=timeout_seconds,
+                token_failover_attempt=token_failover_attempt,
+                emit_lifecycle_bounds=emit_lifecycle_bounds,
+                failure_message="The model emitted plaintext tool-call markup instead of executing a real tool call.",
+                preferred_tools=preferred_tools,
+                tool_execution_retry_count=tool_execution_retry_count,
+                allow_retry=True,
+            ):
+                plaintext_tool_retry_started = True
+                yield retry_event
+            if plaintext_tool_retry_started:
+                state["release_slot"] = None
+                state["selected_token_id"] = None
+                state["should_stop"] = True
+                buffered_assistant_events.clear()
+                return
+            final_assistant = ""
+            should_fail_for_missing_evidence = True
+            should_block_assistant_emit = True
 
         persist_messages = self._sanitize_turn_messages_for_persistence(
             messages=final_messages,

@@ -5,6 +5,11 @@ import json
 import re
 from typing import Any, Optional
 
+from app.atlasclaw.agent.plaintext_tool_calls import (
+    looks_like_plaintext_tool_call_attempt,
+    parse_plaintext_tool_calls,
+)
+
 
 class RunnerToolEvidenceMixin:
     _META_LABEL_OVERRIDES = {
@@ -43,9 +48,18 @@ class RunnerToolEvidenceMixin:
             if str(message.get("role", "")).strip().lower() != "assistant":
                 continue
             tool_calls = message.get("tool_calls")
-            if not isinstance(tool_calls, list):
+            normalized_tool_calls: list[dict[str, Any]] = []
+            if isinstance(tool_calls, list):
+                normalized_tool_calls.extend(
+                    call for call in tool_calls if isinstance(call, dict)
+                )
+            elif looks_like_plaintext_tool_call_attempt(str(message.get("content", "") or "")):
+                normalized_tool_calls.extend(
+                    parse_plaintext_tool_calls(str(message.get("content", "") or ""))
+                )
+            if not normalized_tool_calls:
                 continue
-            for call in tool_calls:
+            for call in normalized_tool_calls:
                 if not isinstance(call, dict):
                     continue
                 name = str(call.get("name", "") or call.get("tool_name", "")).strip()
@@ -667,13 +681,19 @@ class RunnerToolEvidenceMixin:
                 clear_tool_planning_text
                 and index >= safe_start
                 and role == "assistant"
-                and had_tool_calls
+                and (
+                    had_tool_calls
+                    or looks_like_plaintext_tool_call_attempt(str(item.get("content", "") or ""))
+                )
             ):
                 item["content"] = ""
             if (
                 index >= safe_start
                 and role == "assistant"
-                and had_tool_calls
+                and (
+                    had_tool_calls
+                    or looks_like_plaintext_tool_call_attempt(str(message.get("content", "") or ""))
+                )
                 and not item.get("tool_calls")
                 and not str(item.get("content", "") or "").strip()
             ):

@@ -72,6 +72,7 @@ class _PostRunner(
         self.fallback_calls = []
         self.direct_answer_recovery_answer = ""
         self.direct_answer_recovery_calls = []
+        self.retry_after_missing_tool_execution_calls = []
 
     @staticmethod
     def _collect_buffered_assistant_text(buffered_events):
@@ -96,6 +97,7 @@ class _PostRunner(
         )
 
     async def _retry_after_missing_tool_execution(self, **kwargs):
+        self.retry_after_missing_tool_execution_calls.append(kwargs)
         if False:
             yield None
         return
@@ -1109,6 +1111,97 @@ async def test_direct_answer_turn_replaces_tool_call_markup_with_recovery_answer
     assert all("<tool_call>" not in chunk for chunk in assistant_chunks)
     await runner._await_background_post_success_tasks()
     assert session_manager.persisted_messages is not None
+
+
+@pytest.mark.asyncio
+async def test_plaintext_dsml_tool_call_attempt_retries_structured_tool_execution() -> None:
+    runner = _PostRunner()
+    session_manager = _SessionManager()
+    dsml_markup = (
+        "我来为您查询明天上海的天气情况。\n\n"
+        "<｜DSML｜function_calls>\n"
+        "<｜DSML｜invoke name=\"openmeteo_weather\">\n"
+        "<｜DSML｜parameter name=\"location\" string=\"true\">上海</｜DSML｜parameter>\n"
+        "<｜DSML｜parameter name=\"days\" string=\"false\">2</｜DSML｜parameter>\n"
+        "<｜DSML｜parameter name=\"target_date\" string=\"true\">2026-04-15</｜DSML｜parameter>\n"
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜function_calls>"
+    )
+    state = {
+        "start_time": 0.0,
+        "session_key": "s-weather-dsml",
+        "session_manager": session_manager,
+        "session": SimpleNamespace(title=""),
+        "run_id": "run-weather-dsml",
+        "user_message": "上海呢",
+        "system_prompt": "system",
+        "deps": SimpleNamespace(extra={"tool_policy": {"preferred_tools": ["openmeteo_weather"]}}),
+        "tool_gate_decision": ToolGateDecision(
+            needs_tool=False,
+            reason="follow-up weather lookup",
+            policy=ToolPolicyMode.PREFER_TOOL,
+        ),
+        "tool_match_result": SimpleNamespace(missing_capabilities=[], tool_candidates=[]),
+        "available_tools": [
+            {
+                "name": "openmeteo_weather",
+                "capability_class": "weather",
+                "result_mode": "tool_only_ok",
+            }
+        ],
+        "tool_execution_required": False,
+        "max_tool_calls": 5,
+        "timeout_seconds": 60.0,
+        "_token_failover_attempt": 0,
+        "_emit_lifecycle_bounds": False,
+        "selected_token_id": None,
+        "release_slot": None,
+        "tool_execution_retry_count": 0,
+        "persist_override_messages": None,
+        "persist_override_base_len": 0,
+        "run_output_start_index": 1,
+        "persist_run_output_start_index": 1,
+        "buffered_assistant_events": [],
+        "tool_call_summaries": [],
+        "assistant_output_streamed": False,
+        "model_stream_timed_out": False,
+        "model_timeout_error_message": "",
+        "current_model_attempt": 1,
+        "thinking_emitter": SimpleNamespace(assistant_emitted=False),
+        "context_history_for_hooks": [],
+        "session_title": "",
+        "tool_intent_plan": None,
+    }
+
+    events = []
+    async for event in runner._process_agent_run_outcome(
+        agent_run=_AgentRun(
+            [
+                {"role": "user", "content": "上海呢"},
+                {"role": "assistant", "content": dsml_markup},
+            ]
+        ),
+        state=state,
+        _log_step=lambda *args, **kwargs: None,
+    ):
+        events.append(event)
+
+    assistant_chunks = [event.content for event in events if event.type == "assistant"]
+    runtime_warnings = [
+        event for event in events if event.type == "runtime" and event.metadata.get("state") == "warning"
+    ]
+    retry_events = [
+        event for event in events if event.type == "runtime" and event.metadata.get("state") == "retrying"
+    ]
+
+    assert assistant_chunks == []
+    assert runtime_warnings
+    assert retry_events == []
+    assert runner.retry_after_missing_tool_execution_calls
+    retry_call = runner.retry_after_missing_tool_execution_calls[0]
+    assert retry_call["preferred_tools"] == ["openmeteo_weather"]
+    assert "plaintext tool-call markup" in retry_call["failure_message"]
+    assert state.get("should_stop") in {None, False}
 
 
 @pytest.mark.asyncio

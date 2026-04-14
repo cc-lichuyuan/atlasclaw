@@ -274,6 +274,9 @@ class RunnerToolGateRoutingMixin:
             return normalized_user_message, False
         if len(re.sub(r"\s+", "", normalized_user_message)) > 32 and not identifier_follow_up:
             return normalized_user_message, False
+        current_tokens = self._tokenize_classifier_fallback_text(normalized_user_message)
+        compact_current_len = len(re.sub(r"\s+", "", normalized_user_message))
+        low_information_follow_up = compact_current_len <= 8 or len(current_tokens) <= 1
 
         last_assistant_index: Optional[int] = None
         last_assistant_message = ""
@@ -290,8 +293,6 @@ class RunnerToolGateRoutingMixin:
 
         if last_assistant_index is None:
             return normalized_user_message, False
-        if not identifier_follow_up and not self._looks_like_follow_up_request(last_assistant_message):
-            return normalized_user_message, False
 
         previous_user_message = ""
         for index in range(last_assistant_index - 1, -1, -1):
@@ -307,14 +308,19 @@ class RunnerToolGateRoutingMixin:
         if not previous_user_message:
             return normalized_user_message, False
 
-        current_tokens = self._tokenize_classifier_fallback_text(normalized_user_message)
-        compact_current_len = len(re.sub(r"\s+", "", normalized_user_message))
-        low_information_follow_up = compact_current_len <= 8 or len(current_tokens) <= 1
-        if not low_information_follow_up and not identifier_follow_up:
+        if low_information_follow_up:
+            combined = "\n".join(
+                item for item in [previous_user_message, normalized_user_message] if item
+            ).strip()
+            return combined, combined != normalized_user_message
+
+        if not identifier_follow_up and not self._looks_like_follow_up_request(last_assistant_message):
             return normalized_user_message, False
 
-        combined = f"{previous_user_message} {normalized_user_message}".strip()
-        return combined, low_information_follow_up and combined != normalized_user_message
+        combined = "\n".join(
+            item for item in [previous_user_message, normalized_user_message] if item
+        ).strip()
+        return combined, combined != normalized_user_message
 
     @classmethod
     def _identifier_request_is_self_contained(cls, text: str) -> bool:

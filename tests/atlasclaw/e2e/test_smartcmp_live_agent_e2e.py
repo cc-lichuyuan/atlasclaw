@@ -482,6 +482,48 @@ def test_live_agent_weather_query_returns_grounded_weather() -> None:
 
 @pytest.mark.e2e
 @pytest.mark.integration
+def test_live_agent_weather_follow_up_short_location_reuses_context() -> None:
+    base_url, username, password = _require_live_e2e()
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
+    )
+
+    beijing = _run_round_with_transient_retry(
+        session,
+        base_url=base_url,
+        token=token,
+        session_key=session_key,
+        message="明天北京天气呢",
+    )
+    _assert_common_runtime_shape(beijing)
+    _assert_real_tool_call(beijing, "openmeteo_weather")
+    assert re.search(r"(北京|北京市)", beijing.assistant_text)
+
+    shanghai = _run_round_with_transient_retry(
+        session,
+        base_url=base_url,
+        token=token,
+        session_key=session_key,
+        message="上海呢",
+    )
+    _assert_common_runtime_shape(shanghai)
+    _assert_real_tool_call(shanghai, "openmeteo_weather")
+    assert re.search(r"(上海|Shanghai)", shanghai.assistant_text)
+    assert "Weather for" in shanghai.assistant_text or "天气" in shanghai.assistant_text
+
+    print(
+        "LIVE_AGENT_TIMING "
+        f"scenario=weather_follow_up_short_location "
+        f"beijing={beijing.wall_seconds}s "
+        f"shanghai={shanghai.wall_seconds}s"
+    )
+    session.close()
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
 def test_live_agent_public_park_query_answers_directly() -> None:
     base_url, username, password = _require_live_e2e()
     session, token, session_key = _login_and_create_thread(

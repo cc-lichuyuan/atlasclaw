@@ -261,9 +261,13 @@ class RunnerExecutionFlowStreamMixin:
                 tool_intent_plan
             )
             tool_calls_in_node = self.runtime_events.collect_tool_calls(node)
+            plaintext_tool_calls_in_node = []
+            if not tool_calls_in_node:
+                plaintext_tool_calls_in_node = self.runtime_events.collect_plaintext_tool_calls(node)
             buffer_assistant_output = bool(
                 tool_execution_required
                 or tool_calls_in_node
+                or plaintext_tool_calls_in_node
                 or state.get("buffer_direct_answer_output")
             )
             tool_call_summaries = state.get("tool_call_summaries") or []
@@ -310,7 +314,40 @@ class RunnerExecutionFlowStreamMixin:
                 if parsed_args:
                     summary["args"] = parsed_args
                 tool_call_summaries.append(summary)
+            for tool_call in plaintext_tool_calls_in_node:
+                if not isinstance(tool_call, dict):
+                    continue
+                tool_name = str(tool_call.get("name", "") or tool_call.get("tool_name", "")).strip()
+                if not tool_name:
+                    continue
+                parsed_args = self._extract_tool_call_arguments(
+                    tool_call.get("args", tool_call.get("arguments"))
+                )
+                summary = {"name": tool_name}
+                if parsed_args:
+                    summary["args"] = parsed_args
+                tool_call_summaries.append(summary)
             state["tool_call_summaries"] = tool_call_summaries
+
+            if plaintext_tool_calls_in_node and not tool_calls_in_node:
+                state["current_attempt_has_tool"] = True
+                state["plaintext_tool_call_attempt"] = True
+                state["plaintext_tool_call_summaries"] = list(plaintext_tool_calls_in_node)
+                yield StreamEvent.runtime_update(
+                    "warning",
+                    "Model returned plaintext tool-call markup. Recovering with structured tool execution.",
+                    metadata={
+                        "phase": "plaintext_tool_call_attempt",
+                        "attempt": state.get("current_model_attempt"),
+                        "elapsed": round(time.monotonic() - start_time, 1),
+                        "tools": [
+                            str(item.get("name", "") or item.get("tool_name", "")).strip()
+                            for item in plaintext_tool_calls_in_node
+                            if isinstance(item, dict)
+                        ],
+                    },
+                )
+                break
 
             if tool_calls_in_node:
                 current_node_tool_names = [

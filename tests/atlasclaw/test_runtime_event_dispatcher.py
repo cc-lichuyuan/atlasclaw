@@ -102,6 +102,36 @@ def test_collect_tool_calls_reads_tool_call_parts_from_model_response_node():
     ]
 
 
+def test_collect_plaintext_tool_calls_parses_dsml_markup_from_model_response_text() -> None:
+    dispatcher = RuntimeEventDispatcher()
+    node = SimpleNamespace(
+        model_response=ModelResponse(
+            parts=[
+                TextPart(
+                    content=(
+                        "<｜DSML｜function_calls>\n"
+                        "<｜DSML｜invoke name=\"openmeteo_weather\">\n"
+                        "<｜DSML｜parameter name=\"location\" string=\"true\">上海</｜DSML｜parameter>\n"
+                        "<｜DSML｜parameter name=\"days\" string=\"false\">2</｜DSML｜parameter>\n"
+                        "<｜DSML｜parameter name=\"target_date\" string=\"true\">2026-04-15</｜DSML｜parameter>\n"
+                        "</｜DSML｜invoke>\n"
+                        "</｜DSML｜function_calls>"
+                    )
+                )
+            ]
+        )
+    )
+
+    tool_calls = dispatcher.collect_plaintext_tool_calls(node)
+
+    assert tool_calls == [
+        {
+            "name": "openmeteo_weather",
+            "args": {"location": "上海", "days": 2, "target_date": "2026-04-15"},
+        }
+    ]
+
+
 @pytest.mark.asyncio
 async def test_runtime_event_dispatcher_llm_input_carries_loop_metadata() -> None:
     hooks = _HookCollector()
@@ -309,3 +339,95 @@ async def test_stream_buffers_preamble_when_model_response_contains_tool_call_ev
     assert [event.phase for event in tool_events] == ["start", "end"]
     assert len(state["buffered_assistant_events"]) == 1
     assert state["buffered_assistant_events"][0].content == "我来帮您查询SmartCMP当前的审批数据。"
+
+
+@pytest.mark.asyncio
+async def test_stream_buffers_plaintext_dsml_tool_call_attempt_without_leaking_markup() -> None:
+    runtime_hooks = _HookCollector()
+    assistant_hooks = _HookCollector()
+    runner = _StreamTestRunner(
+        nodes=[
+            _ModelRequestNode(
+                content=(
+                    "我来为您查询明天上海的天气情况。\n\n"
+                    "<｜DSML｜function_calls>\n"
+                    "<｜DSML｜invoke name=\"openmeteo_weather\">\n"
+                    "<｜DSML｜parameter name=\"location\" string=\"true\">上海</｜DSML｜parameter>\n"
+                    "<｜DSML｜parameter name=\"days\" string=\"false\">2</｜DSML｜parameter>\n"
+                    "</｜DSML｜invoke>\n"
+                    "</｜DSML｜function_calls>"
+                ),
+            ),
+        ],
+        runtime_hooks=runtime_hooks,
+        assistant_hooks=assistant_hooks,
+    )
+    session_key = "agent:main:user:u1:web:dm:peer-1:topic:thread-4"
+    trace = resolve_trace_context(session_key, run_id="run-4")
+    agent_run = _SequencedAgentRun(
+        snapshots=[
+            [],
+            [
+                {
+                    "role": "assistant",
+                    "content": (
+                        "我来为您查询明天上海的天气情况。\n\n"
+                        "<｜DSML｜function_calls>\n"
+                        "<｜DSML｜invoke name=\"openmeteo_weather\">\n"
+                        "<｜DSML｜parameter name=\"location\" string=\"true\">上海</｜DSML｜parameter>\n"
+                        "<｜DSML｜parameter name=\"days\" string=\"false\">2</｜DSML｜parameter>\n"
+                        "</｜DSML｜invoke>\n"
+                        "</｜DSML｜function_calls>"
+                    ),
+                },
+            ],
+        ]
+    )
+    state = {
+        "deps": SimpleNamespace(extra={}, is_aborted=lambda: False),
+        "start_time": 0.0,
+        "session": None,
+        "session_key": session_key,
+        "session_manager": SimpleNamespace(mark_compacted=lambda *args, **kwargs: None),
+        "run_id": "run-4",
+        "user_message": "上海呢",
+        "system_prompt": "system prompt",
+        "max_tool_calls": 5,
+        "runtime_context_window": None,
+        "flushed_memory_signatures": set(),
+        "session_message_history": [],
+        "runtime_base_history_len": 0,
+        "persist_run_output_start_index": 0,
+        "synthetic_tool_messages": [],
+        "thinking_emitter": ThinkingStreamEmitter(chunk_delay_seconds=0, chunk_size=1024),
+        "tool_intent_plan": None,
+        "tool_execution_required": False,
+        "buffer_direct_answer_output": False,
+        "buffered_assistant_events": [],
+        "tool_call_summaries": [],
+        "executed_tool_names": [],
+        "available_tools": [{"name": "openmeteo_weather"}],
+    }
+
+    with bind_trace_context(trace):
+        events = [
+            event
+            async for event in runner._run_agent_node_stream(
+                agent_run=agent_run,
+                state=state,
+                _log_step=lambda *args, **kwargs: None,
+            )
+        ]
+
+    assistant_events = [event for event in events if event.type == "assistant"]
+    warning_events = [
+        event for event in events if event.type == "runtime" and event.metadata.get("state") == "warning"
+    ]
+
+    assert assistant_events == []
+    assert warning_events
+    assert state["plaintext_tool_call_attempt"] is True
+    assert state["tool_call_summaries"] == [
+        {"name": "openmeteo_weather", "args": {"location": "上海", "days": 2}}
+    ]
+    assert state["buffered_assistant_events"]

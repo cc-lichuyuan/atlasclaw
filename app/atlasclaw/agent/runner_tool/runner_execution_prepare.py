@@ -300,6 +300,118 @@ def resolve_selected_md_skill_target(
     return None
 
 
+def build_retry_tool_intent_plan(
+    *,
+    retry_missing_tools: list[str],
+    available_tools: list[dict[str, Any]],
+) -> ToolIntentPlan | None:
+    """Build a strict retry plan from the model's previously attempted tool names."""
+    normalized_retry_tools = [
+        str(name).strip() for name in (retry_missing_tools or []) if str(name).strip()
+    ]
+    if not normalized_retry_tools:
+        return None
+    available_by_name = {
+        str(tool.get("name", "") or "").strip(): dict(tool)
+        for tool in (available_tools or [])
+        if isinstance(tool, dict) and str(tool.get("name", "") or "").strip()
+    }
+    matched_names = [name for name in normalized_retry_tools if name in available_by_name]
+    if not matched_names:
+        return None
+    target_capability_classes: list[str] = []
+    target_provider_types: list[str] = []
+    for name in matched_names:
+        tool = available_by_name[name]
+        capability_class = str(tool.get("capability_class", "") or "").strip()
+        provider_type = str(tool.get("provider_type", "") or "").strip()
+        if capability_class and capability_class not in target_capability_classes:
+            target_capability_classes.append(capability_class)
+        if provider_type and provider_type not in target_provider_types:
+            target_provider_types.append(provider_type)
+    return ToolIntentPlan(
+        action=ToolIntentAction.USE_TOOLS,
+        target_tool_names=matched_names,
+        target_capability_classes=target_capability_classes,
+        target_provider_types=target_provider_types,
+        reason=(
+            "Retrying this turn after the previous model attempt emitted plaintext tool-call markup "
+            "instead of executing a real structured tool call."
+        ),
+    )
+
+
+def build_recent_follow_up_tool_intent_plan(
+    *,
+    recent_history: list[dict[str, Any]],
+    available_tools: list[dict[str, Any]],
+) -> ToolIntentPlan | None:
+    """Reuse the single recent tool context for low-information follow-up turns."""
+    available_by_name = {
+        str(tool.get("name", "") or "").strip(): dict(tool)
+        for tool in (available_tools or [])
+        if isinstance(tool, dict) and str(tool.get("name", "") or "").strip()
+    }
+    if not available_by_name:
+        return None
+
+    distinct_tool_names: list[str] = []
+    seen: set[str] = set()
+
+    for message in reversed(recent_history or []):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "") or "").strip().lower()
+        candidate_names: list[str] = []
+        if role in {"tool", "toolresult", "tool_result"}:
+            tool_name = str(message.get("tool_name", "") or message.get("name", "")).strip()
+            if tool_name:
+                candidate_names.append(tool_name)
+        tool_results = message.get("tool_results")
+        if isinstance(tool_results, list):
+            for result in reversed(tool_results):
+                if not isinstance(result, dict):
+                    continue
+                tool_name = str(result.get("tool_name", "") or result.get("name", "")).strip()
+                if tool_name:
+                    candidate_names.append(tool_name)
+        for tool_name in candidate_names:
+            if tool_name not in available_by_name or tool_name in seen:
+                continue
+            seen.add(tool_name)
+            distinct_tool_names.append(tool_name)
+            if len(distinct_tool_names) >= 2:
+                break
+        if len(distinct_tool_names) >= 2:
+            break
+
+    if len(distinct_tool_names) != 1:
+        return None
+
+    matched_name = distinct_tool_names[0]
+    tool = available_by_name[matched_name]
+    capability_class = str(tool.get("capability_class", "") or "").strip()
+    provider_type = str(tool.get("provider_type", "") or "").strip()
+
+    target_capability_classes: list[str] = []
+    target_provider_types: list[str] = []
+    if capability_class:
+        target_capability_classes.append(capability_class)
+    if provider_type:
+        target_provider_types.append(provider_type)
+
+    return ToolIntentPlan(
+        action=ToolIntentAction.USE_TOOLS,
+        target_tool_names=[matched_name],
+        target_capability_classes=target_capability_classes,
+        target_provider_types=target_provider_types,
+        reason=(
+            "Low-information follow-up reused the single recent tool context from the current "
+            "thread so the main model can continue the same evidence-driven workflow."
+        ),
+    )
+
+
 class RunnerExecutionPreparePhaseMixin:
     async def _run_prepare_phase(self, *, state: dict[str, Any], _log_step: Any) -> AsyncIterator[StreamEvent]:
         """Prepare runtime/session/prompt/tool-gate phase before model loop."""
@@ -591,6 +703,21 @@ class RunnerExecutionPreparePhaseMixin:
                 metadata_candidates=metadata_candidates,
                 available_tools=available_tools,
             )
+            retry_missing_tools = []
+            if isinstance(getattr(deps, "extra", None), dict):
+                candidate_retry_tools = deps.extra.get("tool_execution_retry_missing_tools")
+                if isinstance(candidate_retry_tools, list):
+                    retry_missing_tools = [
+                        str(name).strip()
+                        for name in candidate_retry_tools
+                        if str(name).strip()
+                    ]
+            retry_tool_intent_plan = build_retry_tool_intent_plan(
+                retry_missing_tools=retry_missing_tools,
+                available_tools=available_tools,
+            )
+            if retry_tool_intent_plan is not None:
+                metadata_tool_intent_plan = retry_tool_intent_plan
             if metadata_tool_intent_plan is not None:
                 _log_step(
                     "tool_metadata_hint_resolved",
@@ -626,6 +753,26 @@ class RunnerExecutionPreparePhaseMixin:
                 metadata_plan=metadata_tool_intent_plan,
                 explicit_capability_match=explicit_capability_match,
             )
+            if tool_intent_plan is None and used_follow_up_context:
+                follow_up_tool_intent_plan = build_recent_follow_up_tool_intent_plan(
+                    recent_history=message_history,
+                    available_tools=available_tools,
+                )
+                if follow_up_tool_intent_plan is not None:
+                    tool_intent_plan = build_llm_first_guidance_plan(
+                        user_message=tool_request_message,
+                        metadata_plan=follow_up_tool_intent_plan,
+                        explicit_capability_match=True,
+                    )
+                    _log_step(
+                        "follow_up_tool_context_reused",
+                        action=follow_up_tool_intent_plan.action.value,
+                        target_provider_types=list(follow_up_tool_intent_plan.target_provider_types),
+                        target_capability_classes=list(
+                            follow_up_tool_intent_plan.target_capability_classes
+                        ),
+                        target_tool_names=list(follow_up_tool_intent_plan.target_tool_names),
+                    )
             artifact_goal = resolve_artifact_goal_from_intent_plan(metadata_tool_intent_plan)
             if isinstance(deps.extra, dict):
                 if artifact_goal is not None:
