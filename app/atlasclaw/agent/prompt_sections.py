@@ -6,14 +6,16 @@ from __future__ import annotations
 import platform
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
-def build_target_md_skill(target_md_skill: dict[str, str]) -> str:
-    """Build a focused section for webhook-directed markdown skill execution."""
+def build_target_md_skill(target_md_skill: dict[str, Any]) -> str:
+    """Build a focused section for stage-two markdown skill execution."""
     qualified_name = target_md_skill.get("qualified_name", "")
     file_path = target_md_skill.get("file_path", "")
     provider = target_md_skill.get("provider", "")
+    loaded_body = str(target_md_skill.get("content", "") or "")
+    body_truncated = bool(target_md_skill.get("content_truncated"))
     lines = ["## Target Markdown Skill", ""]
     if qualified_name:
         lines.append(f"Qualified name: {qualified_name}")
@@ -21,8 +23,27 @@ def build_target_md_skill(target_md_skill: dict[str, str]) -> str:
         lines.append(f"Provider: {provider}")
     if file_path:
         lines.append(f"File path: {file_path}")
-    lines.append("You must execute only this markdown skill for the current run.")
+    if loaded_body:
+        lines.append("This skill body was loaded specifically for the current turn.")
+    else:
+        lines.append(
+            "This skill was selected for the current turn. If you need its detailed instructions, "
+            "read the referenced `SKILL.md` before executing."
+        )
+    lines.append("You must use only this markdown skill for the current run.")
     lines.append("Prefer any executable tool already registered for this skill.")
+    if loaded_body:
+        lines.extend(
+            [
+                "",
+                "### Loaded SKILL.md",
+                "",
+                loaded_body,
+            ]
+        )
+        if body_truncated:
+            lines.append("")
+            lines.append("Note: the loaded SKILL.md content was truncated to stay within prompt limits.")
     return "\n".join(lines)
 
 
@@ -148,14 +169,36 @@ def build_tool_policy(tool_policy: Optional[dict]) -> str:
     elif mode == "create_artifact":
         lines.append("This turn is an artifact-generation request.")
         lines.append(
+            "If this turn already exposes a matching artifact tool, you must use that tool before giving the final answer."
+        )
+        lines.append(
             "You may use tools when they help gather or save data, but do not stop after intermediate lookup results."
         )
         lines.append(
             "Either produce the requested artifact, ask one focused clarification question, or explain what blocked artifact creation."
         )
     else:
-        lines.append("You may answer directly when the request is stable and does not require tool execution.")
-        if not preferred_tools:
+        lines.append(
+            "Use the visible capabilities and conversation context to decide this turn inside the main model request."
+        )
+        if preferred_tools:
+            lines.append(
+                "You may answer directly, ask one focused clarification question, call a visible tool, or continue toward the requested artifact."
+            )
+            lines.append(
+                "Metadata and preferred tools are hints only unless the policy above explicitly says real tool execution is required."
+            )
+            lines.append(
+                "Only call a tool when the current request clearly matches a visible capability or when earlier tool evidence in this same run makes the next tool step obvious."
+            )
+            lines.append(
+                "For general recommendations, brainstorming, summaries, or public knowledge questions that you can answer from existing knowledge and conversation context, answer directly instead of calling generic tools."
+            )
+            lines.append(
+                "Do not call generic web tools just because they are visible. Use them only when the user explicitly asks to search/verify/browse, or when a visible web capability is the clearest fit for the request."
+            )
+        else:
+            lines.append("You may answer directly when the request is stable and does not require tool execution.")
             lines.append("No tools are available in this turn.")
             lines.append(
                 "Do not emit tool-call markup, XML tags, or pseudo tool invocations like "
@@ -267,7 +310,7 @@ def build_capability_index(config, capability_index: list[dict]) -> str:
     budget = max(1, int(getattr(config, "capability_index_max_chars", 3000) or 3000))
     home_prefix = str(Path.home())
 
-    normalized_entries: list[dict[str, str]] = []
+    normalized_entries: list[dict[str, Any]] = []
     for raw_entry in capability_index:
         if not isinstance(raw_entry, dict):
             continue
@@ -278,6 +321,22 @@ def build_capability_index(config, capability_index: list[dict]) -> str:
         capability_id = str(raw_entry.get("capability_id", "") or "").strip()
         description = str(raw_entry.get("description", "") or "").strip()
         locator = str(raw_entry.get("locator", "") or "").strip()
+        provider_type = str(raw_entry.get("provider_type", "") or "").strip()
+        artifact_types = [
+            str(item).strip()
+            for item in (raw_entry.get("artifact_types", []) or [])
+            if str(item).strip()
+        ]
+        declared_tool_names = [
+            str(item).strip()
+            for item in (raw_entry.get("declared_tool_names", []) or [])
+            if str(item).strip()
+        ]
+        input_hints = [
+            str(item).strip()
+            for item in (raw_entry.get("input_hints", []) or [])
+            if str(item).strip()
+        ]
         if locator.startswith(home_prefix):
             locator = "~" + locator[len(home_prefix) :]
         normalized_entries.append(
@@ -287,6 +346,10 @@ def build_capability_index(config, capability_index: list[dict]) -> str:
                 "name": name or "unknown",
                 "description": description,
                 "locator": locator,
+                "provider_type": provider_type,
+                "artifact_types": artifact_types,
+                "declared_tool_names": declared_tool_names,
+                "input_hints": input_hints,
             }
         )
 
@@ -312,7 +375,7 @@ def build_capability_index(config, capability_index: list[dict]) -> str:
             "When you need detailed instructions for a capability, use the referenced "
             "locator rather than expecting a full body in context."
         ),
-        "Format: `capability_id | name | description | locator`",
+        "Format: `capability_id | name | description | provider/artifact/tools/hints | locator`",
         "",
     ]
 
@@ -336,9 +399,31 @@ def build_capability_index(config, capability_index: list[dict]) -> str:
             description = entry["description"]
             if len(description) > desc_max:
                 description = description[: desc_max - 3] + "..."
+            detail_parts: list[str] = []
+            provider_type = str(entry.get("provider_type", "") or "").strip()
+            if provider_type:
+                detail_parts.append(f"provider:{provider_type}")
+            artifact_types = [str(item).strip() for item in entry.get("artifact_types", []) or [] if str(item).strip()]
+            if artifact_types:
+                detail_parts.append("artifacts:" + ",".join(artifact_types[:2]))
+            declared_tool_names = [
+                str(item).strip()
+                for item in entry.get("declared_tool_names", []) or []
+                if str(item).strip()
+            ]
+            if declared_tool_names:
+                detail_parts.append("tools:" + ",".join(declared_tool_names[:2]))
+            input_hints = [
+                str(item).strip()
+                for item in entry.get("input_hints", []) or []
+                if str(item).strip()
+            ]
+            if input_hints:
+                detail_parts.append("hints:" + ",".join(input_hints[:2]))
+            detail_text = " ; ".join(detail_parts) if detail_parts else "-"
             line = (
                 f"- `{entry['capability_id']}` | {entry['name']} | {description} | "
-                f"`{entry['locator']}`"
+                f"{detail_text} | `{entry['locator']}`"
             )
             if not _fits(rendered_lines, [line]):
                 truncated = True

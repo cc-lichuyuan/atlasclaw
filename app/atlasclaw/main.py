@@ -512,6 +512,7 @@ async def lifespan(app: FastAPI):
             md_skills_max_count=config.skills.md_skills_max_count,
             md_skills_desc_max_chars=config.skills.md_skills_desc_max_chars,
             md_skills_max_index_chars=config.skills.md_skills_index_max_chars,
+            md_skills_max_file_bytes=config.skills.md_skills_max_file_bytes,
             capability_index_max_count=config.skills.capability_index_max_count,
             capability_index_desc_max_chars=config.skills.capability_index_desc_max_chars,
             capability_index_max_chars=config.skills.capability_index_max_chars,
@@ -549,7 +550,6 @@ async def lifespan(app: FastAPI):
         agent_pool=agent_pool,
         token_interceptor=token_interceptor,
         agent_factory=_build_agent_for,
-        tool_gate_model_classifier_enabled=config.tool_gate.enable_model_classifier,
         context_pruning_settings=runtime_context_pruning_settings,
     )
 

@@ -564,6 +564,24 @@ class TestPromptBuilderMdSkills:
         assert "smartcmp:preapproval-agent" in output
         assert "/skills/preapproval-agent/SKILL.md" in output
 
+    def test_target_md_skill_body_rendered_in_minimal_mode(self):
+        """定向 markdown skill 在 MINIMAL 模式下也会注入已加载正文"""
+        b = self._builder(mode=PromptMode.MINIMAL)
+        output = b.build(
+            md_skills=[_make_md_skill()],
+            target_md_skill={
+                "provider": "pptx",
+                "qualified_name": "pptx",
+                "file_path": "/skills/pptx/SKILL.md",
+                "content": "# PPTX Skill\n\nUse this skill to create slides.",
+            },
+        )
+
+        assert "Target Markdown Skill" in output
+        assert "This skill body was loaded specifically for the current turn." in output
+        assert "# PPTX Skill" in output
+        assert "## Skills" not in output
+
     def test_description_truncation(self):
         """描述超过 desc_max_chars 时截断"""
         b = self._builder(md_skills_desc_max_chars=200)

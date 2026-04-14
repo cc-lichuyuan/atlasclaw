@@ -6,82 +6,56 @@ from typing import Any, Optional
 from app.atlasclaw.agent.tool_gate_models import ToolIntentAction, ToolIntentPlan
 
 
-_ARTIFACT_KEYWORDS = (
-    "ppt",
-    "pptx",
-    "powerpoint",
-    "slide deck",
-    "slides",
-    "markdown",
-    "md",
-    "文档",
-    "文件",
-    "导出",
-    "保存",
-    "写入",
-    "生成",
-    "汇报",
-    "演示文稿",
-    "幻灯片",
-    "报告",
-)
-
-_GENERIC_FALLBACK_CAPABILITY_CLASSES = {
-    "web_search",
-    "web_fetch",
-    "browser",
-}
-
-_GENERIC_FALLBACK_TOOL_NAMES = {
-    "web_search",
-    "web_fetch",
-    "browser",
-}
-
-
 def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def resolve_artifact_goal(user_message: str) -> Optional[dict[str, Any]]:
-    normalized = _normalize_text(user_message).lower()
-    if not normalized:
+def _extract_artifact_kinds_from_capability_classes(values: list[str]) -> list[str]:
+    kinds: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized_value = _normalize_text(value).lower()
+        if not normalized_value.startswith("artifact:"):
+            continue
+        kind = normalized_value.split("artifact:", 1)[-1].strip()
+        if not kind or kind in seen:
+            continue
+        seen.add(kind)
+        kinds.append(kind)
+    return kinds
+
+
+def _build_artifact_goal_label(kind: str) -> str:
+    normalized_kind = _normalize_text(kind).lower()
+    if not normalized_kind:
+        return "requested artifact"
+    compact = normalized_kind.replace("_", " ").replace("-", " ").strip()
+    if not compact:
+        return "requested artifact"
+    if len(compact) <= 5:
+        return f"{compact.upper()} artifact"
+    return f"{compact.title()} artifact"
+
+
+def resolve_artifact_goal_from_intent_plan(
+    intent_plan: Optional[ToolIntentPlan],
+) -> Optional[dict[str, Any]]:
+    """Derive artifact expectations from explicit capability metadata, not user text."""
+    if intent_plan is None:
         return None
 
-    if any(keyword in normalized for keyword in ("pptx", "ppt", "powerpoint", "演示文稿", "幻灯片")):
-        return {
-            "kind": "pptx",
-            "label": "PowerPoint deck",
-            "extensions": [".pptx", ".ppt"],
-        }
-    if any(keyword in normalized for keyword in ("markdown", " md", ".md", "markdown文件")):
-        return {
-            "kind": "markdown",
-            "label": "Markdown file",
-            "extensions": [".md", ".markdown"],
-        }
-    if any(keyword in normalized for keyword in ("报告", "report")):
-        return {
-            "kind": "report",
-            "label": "Report artifact",
-            "extensions": [".md", ".markdown", ".pptx", ".ppt", ".docx", ".pdf", ".txt"],
-        }
-    if any(keyword in normalized for keyword in ("文档", "文件", "导出", "保存", "写入", "生成")):
-        return {
-            "kind": "file",
-            "label": "File artifact",
-            "extensions": [],
-        }
-    return None
-
-
-def looks_like_artifact_request(user_message: str) -> bool:
-    normalized = _normalize_text(user_message).lower()
-    if not normalized:
-        return False
-    return resolve_artifact_goal(user_message) is not None or any(
-        keyword in normalized for keyword in _ARTIFACT_KEYWORDS
+    artifact_kinds = _extract_artifact_kinds_from_capability_classes(
+        list(intent_plan.target_capability_classes or [])
     )
+    if not artifact_kinds:
+        return None
+
+    kind = artifact_kinds[0]
+    return {
+        "kind": kind,
+        "label": _build_artifact_goal_label(kind),
+        "extensions": [],
+    }
 
 
 def _collect_artifact_path_candidates(payload: Any) -> list[str]:
@@ -91,15 +65,12 @@ def _collect_artifact_path_candidates(payload: Any) -> list[str]:
     if isinstance(payload, dict):
         for key, value in payload.items():
             normalized_key = _normalize_text(key).lower()
-            if normalized_key in {
-                "file_path",
-                "path",
-                "output_path",
-                "artifact_path",
-                "report_path",
-                "ppt_path",
-                "markdown_path",
-            }:
+            if (
+                normalized_key == "path"
+                or normalized_key.endswith("_path")
+                or normalized_key.endswith("_file")
+                or normalized_key.endswith("_filepath")
+            ):
                 normalized_value = _normalize_text(value)
                 if normalized_value:
                     candidates.append(normalized_value)
@@ -126,29 +97,19 @@ def tool_output_satisfies_artifact_goal(
     if not artifact_goal:
         return True
 
-    goal_kind = _normalize_text(artifact_goal.get("kind", "")).lower()
     extensions = [
         _normalize_text(item).lower()
         for item in list(artifact_goal.get("extensions", []) or [])
         if _normalize_text(item)
     ]
     path_candidates = [item.lower() for item in _collect_artifact_path_candidates(payload)]
-    normalized_tool_name = _normalize_text(tool_name).lower()
 
     if extensions:
         for candidate in path_candidates:
             if any(candidate.endswith(extension) for extension in extensions):
                 return True
 
-    if goal_kind == "file" and path_candidates:
-        return True
-    if goal_kind == "report" and path_candidates:
-        return True
-    if goal_kind == "pptx" and "ppt" in normalized_tool_name and path_candidates:
-        return True
-    if goal_kind == "markdown" and "write" in normalized_tool_name and path_candidates:
-        return True
-    return False
+    return bool(path_candidates)
 
 
 def messages_satisfy_artifact_goal(
@@ -223,81 +184,37 @@ def selected_capability_ids_from_intent_plan(intent_plan: Optional[ToolIntentPla
     return selected_ids
 
 
-def should_force_metadata_tool_path(
+def build_llm_first_guidance_plan(
     *,
     user_message: str,
     metadata_plan: Optional[ToolIntentPlan],
-) -> bool:
-    if metadata_plan is None or metadata_plan.action is not ToolIntentAction.USE_TOOLS:
-        return False
-    if looks_like_artifact_request(user_message):
-        return False
+    explicit_capability_match: bool,
+) -> Optional[ToolIntentPlan]:
+    _ = user_message
 
-    target_provider_types = {
-        _normalize_text(item).lower()
-        for item in list(metadata_plan.target_provider_types or [])
-        if _normalize_text(item)
-    }
-    target_skill_names = {
-        _normalize_text(item).lower()
-        for item in list(metadata_plan.target_skill_names or [])
-        if _normalize_text(item)
-    }
-    target_capability_classes = {
-        _normalize_text(item).lower()
-        for item in list(metadata_plan.target_capability_classes or [])
-        if _normalize_text(item)
-    }
-    target_tool_names = {
-        _normalize_text(item)
-        for item in list(metadata_plan.target_tool_names or [])
-        if _normalize_text(item)
-    }
+    if metadata_plan is None or not explicit_capability_match:
+        return None
 
-    if target_provider_types or target_skill_names:
-        return True
-
-    if target_capability_classes.difference(_GENERIC_FALLBACK_CAPABILITY_CLASSES):
-        return True
-
-    if target_tool_names.difference(_GENERIC_FALLBACK_TOOL_NAMES):
-        return True
-
-    return False
-
-
-def build_llm_first_intent_plan(
-    *,
-    user_message: str,
-    metadata_plan: Optional[ToolIntentPlan],
-) -> ToolIntentPlan:
-    if should_force_metadata_tool_path(
-        user_message=user_message,
-        metadata_plan=metadata_plan,
+    if not any(
+        [
+            list(metadata_plan.target_provider_types or []),
+            list(metadata_plan.target_skill_names or []),
+            list(metadata_plan.target_group_ids or []),
+            list(metadata_plan.target_capability_classes or []),
+            list(metadata_plan.target_tool_names or []),
+        ]
     ):
-        return metadata_plan.model_copy(
-            update={
-                "reason": (
-                    _normalize_text(metadata_plan.reason)
-                    or "Strong provider/skill metadata match requires real tool execution."
-                )
-            }
-        )
-
-    artifact_goal = resolve_artifact_goal(user_message)
-    if artifact_goal is not None:
-        return ToolIntentPlan(
-            action=ToolIntentAction.CREATE_ARTIFACT,
-            reason=(
-                "Artifact-style follow-up detected. Keep full context and let the main model "
-                "decide whether to create an artifact, ask for clarification, or use tools."
-            ),
-        )
+        return None
 
     return ToolIntentPlan(
         action=ToolIntentAction.DIRECT_ANSWER,
+        target_provider_types=list(metadata_plan.target_provider_types or []),
+        target_skill_names=list(metadata_plan.target_skill_names or []),
+        target_group_ids=list(metadata_plan.target_group_ids or []),
+        target_capability_classes=list(metadata_plan.target_capability_classes or []),
+        target_tool_names=list(metadata_plan.target_tool_names or []),
         reason=(
-            "LLM-first runtime routing is active. Metadata may bias visible capabilities, "
-            "but the main model decides whether this turn needs tools."
+            "LLM-first runtime routing is active. Metadata narrows visible capability hints, "
+            "but it does not decide the turn action before the main model sees the request."
         ),
     )

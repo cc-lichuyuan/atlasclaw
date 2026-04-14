@@ -70,6 +70,8 @@ class PromptBuilderConfig:
     capability_index_desc_max_chars: int = 200
     # Maximum number of unified capability entries in the index section
     capability_index_max_count: int = 20
+    # Maximum bytes to inline for a selected markdown skill body in stage-two expansion
+    md_skills_max_file_bytes: int = 262144
 
 
 class PromptBuilder:
@@ -168,6 +170,9 @@ class PromptBuilder:
             if user_ctx:
                 parts.append(user_ctx)
         
+        if target_md_skill:
+            parts.append(self._build_target_md_skill(target_md_skill))
+
         if effective_mode == PromptMode.FULL:
             # 4. Markdown skill index (HIGHEST PRIORITY - check these first!)
             if capability_index is not None:
@@ -184,9 +189,6 @@ class PromptBuilder:
                 if skills:
                     parts.append(self._build_skills_listing(skills))
 
-            if target_md_skill:
-                parts.append(self._build_target_md_skill(target_md_skill))
-            
             # 5. Self-update instructions
             parts.append(self._build_self_update())
             

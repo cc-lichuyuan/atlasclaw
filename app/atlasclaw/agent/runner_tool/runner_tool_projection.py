@@ -13,10 +13,21 @@ DEFAULT_COORDINATION_TOOL_NAMES = (
 )
 
 
+def _artifact_turn_has_explicit_targets(intent_plan: ToolIntentPlan) -> bool:
+    if intent_plan.action is not ToolIntentAction.CREATE_ARTIFACT:
+        return False
+    if any(str(item).strip() for item in intent_plan.target_tool_names):
+        return True
+    return any(
+        str(item).strip().lower().startswith("artifact:")
+        for item in intent_plan.target_capability_classes
+    )
+
+
 def project_minimal_toolset(
     *,
     allowed_tools: list[dict[str, Any]],
-    intent_plan: ToolIntentPlan,
+    intent_plan: ToolIntentPlan | None,
     coordination_tool_names: tuple[str, ...] = DEFAULT_COORDINATION_TOOL_NAMES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Project the policy-allowed tool universe into the minimal executable set for this turn."""
@@ -30,15 +41,19 @@ def project_minimal_toolset(
         "reason": "projection_not_required",
         "before_count": len(normalized_tools),
         "after_count": len(normalized_tools),
-        "action": intent_plan.action.value,
-        "target_provider_types": list(intent_plan.target_provider_types),
-        "target_skill_names": list(intent_plan.target_skill_names),
-        "target_group_ids": list(intent_plan.target_group_ids),
-        "target_capability_classes": list(intent_plan.target_capability_classes),
-        "target_tool_names": list(intent_plan.target_tool_names),
+        "action": intent_plan.action.value if intent_plan is not None else "",
+        "target_provider_types": list(intent_plan.target_provider_types) if intent_plan is not None else [],
+        "target_skill_names": list(intent_plan.target_skill_names) if intent_plan is not None else [],
+        "target_group_ids": list(intent_plan.target_group_ids) if intent_plan is not None else [],
+        "target_capability_classes": list(intent_plan.target_capability_classes) if intent_plan is not None else [],
+        "target_tool_names": list(intent_plan.target_tool_names) if intent_plan is not None else [],
         "coordination_tools": [],
     }
-    if intent_plan.action is not ToolIntentAction.USE_TOOLS:
+    if intent_plan is None:
+        return normalized_tools, trace
+    if intent_plan.action is not ToolIntentAction.USE_TOOLS and not _artifact_turn_has_explicit_targets(
+        intent_plan
+    ):
         return normalized_tools, trace
 
     current = list(normalized_tools)
@@ -136,7 +151,7 @@ def project_minimal_toolset(
     )
 
     coordination_tools: list[dict[str, Any]] = []
-    if current:
+    if current and intent_plan.action is ToolIntentAction.USE_TOOLS:
         current_names = {str(tool.get("name", "") or "").strip() for tool in current}
         for tool in normalized_tools:
             tool_name = str(tool.get("name", "") or "").strip()
@@ -163,19 +178,19 @@ def project_minimal_toolset(
     return current, trace
 
 
-def project_planner_toolset(
+def compress_candidate_toolset(
     *,
     allowed_tools: list[dict[str, Any]],
     metadata_candidates: dict[str, Any] | None,
     used_follow_up_context: bool,
     min_metadata_confidence: float = 0.3,
+    compression_threshold: int = 12,
     coordination_tool_names: tuple[str, ...] = DEFAULT_COORDINATION_TOOL_NAMES,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Project a smaller planner-visible tool universe before the intent-plan model call.
+    """Optionally shrink the visible toolset without deciding the turn action.
 
-    For non-follow-up turns, provider/skill tools are hidden unless metadata strongly points
-    to a specific provider/skill subset. This keeps planner prompts small without hardcoding
-    user-topic rules.
+    Metadata recall is allowed to reduce the candidate surface when the visible
+    toolset is large, but it must not force `use_tools` or any other action.
     """
     normalized_tools = [
         dict(tool)
@@ -184,7 +199,7 @@ def project_planner_toolset(
     ]
     trace: dict[str, Any] = {
         "enabled": False,
-        "reason": "planner_projection_not_required",
+        "reason": "candidate_compression_not_required",
         "before_count": len(normalized_tools),
         "after_count": len(normalized_tools),
         "used_follow_up_context": bool(used_follow_up_context),
@@ -197,54 +212,35 @@ def project_planner_toolset(
     if not normalized_tools:
         return [], trace
 
+    if len(normalized_tools) <= max(1, int(compression_threshold or 0)):
+        return normalized_tools, trace
+
     subset = _select_tools_from_metadata_candidates(
         tools=normalized_tools,
         metadata_candidates=metadata_candidates,
         min_metadata_confidence=min_metadata_confidence,
     )
-    if subset:
-        subset = _append_coordination_tools(
-            current=subset,
-            all_tools=normalized_tools,
-            coordination_tool_names=coordination_tool_names,
-        )
-        trace.update(
-            {
-                "enabled": True,
-                "reason": "planner_metadata_subset",
-                "after_count": len(subset),
-                "coordination_tools": [
-                    str(tool.get("name", "") or "").strip()
-                    for tool in subset
-                    if str(tool.get("name", "") or "").strip() in coordination_tool_names
-                ],
-            }
-        )
-        return subset, trace
-
-    if used_follow_up_context:
+    if not subset or len(subset) >= len(normalized_tools):
         return normalized_tools, trace
 
-    general_tools = [
-        tool
-        for tool in normalized_tools
-        if (
-            not _is_provider_or_skill_tool(tool)
-            and str(tool.get("name", "") or "").strip() not in coordination_tool_names
-            and _is_planner_general_visible_tool(tool)
-        )
-    ]
-    if general_tools:
-        trace.update(
-            {
-                "enabled": True,
-                "reason": "planner_general_tools_only",
-                "after_count": len(general_tools),
-            }
-        )
-        return general_tools, trace
-
-    return normalized_tools, trace
+    subset = _append_coordination_tools(
+        current=subset,
+        all_tools=normalized_tools,
+        coordination_tool_names=coordination_tool_names,
+    )
+    trace.update(
+        {
+            "enabled": True,
+            "reason": "candidate_compression_applied",
+            "after_count": len(subset),
+            "coordination_tools": [
+                str(tool.get("name", "") or "").strip()
+                for tool in subset
+                if str(tool.get("name", "") or "").strip() in coordination_tool_names
+            ],
+        }
+    )
+    return subset, trace
 
 
 def tool_required_turn_has_real_execution(
@@ -256,7 +252,7 @@ def tool_required_turn_has_real_execution(
     executed_tool_names: list[str] | None = None,
 ) -> bool:
     """Return whether a tool-required turn has at least one real tool execution record."""
-    if intent_plan is None or intent_plan.action is not ToolIntentAction.USE_TOOLS:
+    if intent_plan is None or not turn_action_requires_tool_execution(intent_plan):
         return True
 
     if executed_tool_names:
@@ -299,21 +295,13 @@ def tool_required_turn_has_real_execution(
                     return True
     return False
 
-
-def _is_planner_general_visible_tool(tool: dict[str, Any]) -> bool:
-    visibility = str(tool.get("planner_visibility", "") or "").strip().lower()
-    if visibility == "general":
-        return True
-    if visibility:
-        return False
-    return False
-
-
 def turn_action_requires_tool_execution(intent_plan: ToolIntentPlan | None) -> bool:
     """Return whether the current turn contract requires a real executed tool."""
     if intent_plan is None:
         return False
-    return intent_plan.action is ToolIntentAction.USE_TOOLS
+    if intent_plan.action is ToolIntentAction.USE_TOOLS:
+        return True
+    return _artifact_turn_has_explicit_targets(intent_plan)
 
 
 def _select_tools_from_metadata_candidates(

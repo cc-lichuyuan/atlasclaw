@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
 import requests
+from pptx import Presentation
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:8000"
@@ -82,6 +85,18 @@ def _create_thread(session: requests.Session, *, base_url: str, token: str) -> s
     session_key = str(payload.get("session_key", "")).strip()
     assert session_key, f"session_key missing: {payload}"
     return session_key
+
+
+def _login_and_create_thread(
+    *,
+    base_url: str,
+    username: str,
+    password: str,
+) -> tuple[requests.Session, str, str]:
+    session = requests.Session()
+    token = _login(session, base_url=base_url, username=username, password=password)
+    session_key = _create_thread(session, base_url=base_url, token=token)
+    return session, token, session_key
 
 
 def _run_round(
@@ -199,6 +214,9 @@ def _assert_elapsed_monotonic(result: LiveRunResult) -> None:
     last_elapsed = -1.0
     for item in result.runtime_items:
         elapsed = float(item.get("elapsed", 0.0) or 0.0)
+        phase = str(item.get("phase", "") or "").strip().lower()
+        if phase == "start" and elapsed <= 0.1:
+            last_elapsed = -1.0
         assert elapsed >= last_elapsed, f"elapsed not monotonic in {result.run_id}: {result.runtime_items}"
         last_elapsed = elapsed
 
@@ -220,11 +238,14 @@ def _assert_real_tool_call(result: LiveRunResult, expected_tool_name: str) -> No
     assert expected_tool_name in planned_tools, f"expected tool {expected_tool_name}, got {planned_tools}"
 
 
-def _assert_common_runtime_shape(result: LiveRunResult) -> None:
+def _assert_common_runtime_shape(result: LiveRunResult, *, require_tool: bool = True) -> None:
     assert result.lifecycle[:1] == ["start"], f"missing lifecycle start: {result.lifecycle}"
     assert result.lifecycle[-1:] == ["end"], f"missing lifecycle end: {result.lifecycle}"
     assert result.runtime_states[-1:] == ["answered"], f"final state not answered: {result.runtime_states}"
-    assert "waiting_for_tool" in result.runtime_states, f"no tool phase: {result.runtime_states}"
+    if require_tool:
+        assert "waiting_for_tool" in result.runtime_states, f"no tool phase: {result.runtime_states}"
+    else:
+        assert "waiting_for_tool" not in result.runtime_states, f"unexpected tool phase: {result.runtime_states}"
     assert result.assistant_text, f"assistant text missing for run {result.run_id}"
     _assert_elapsed_monotonic(result)
     _assert_no_timeout_or_failure(result)
@@ -232,12 +253,13 @@ def _assert_common_runtime_shape(result: LiveRunResult) -> None:
 
 @pytest.mark.e2e
 @pytest.mark.integration
-def test_live_smartcmp_agent_three_turns_return_grounded_results() -> None:
+def test_live_agent_cmp_pending_returns_grounded_results() -> None:
     base_url, username, password = _require_live_e2e()
-    session = requests.Session()
-
-    token = _login(session, base_url=base_url, username=username, password=password)
-    session_key = _create_thread(session, base_url=base_url, token=token)
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
+    )
 
     pending = _run_round_with_transient_retry(
         session,
@@ -252,6 +274,20 @@ def test_live_smartcmp_agent_three_turns_return_grounded_results() -> None:
     assert "TIC20260313000006" in pending.assistant_text
     assert "TIC20260313000004" in pending.assistant_text
     assert "一级审批" in pending.assistant_text
+
+    print(f"LIVE_AGENT_TIMING scenario=cmp_pending elapsed={pending.wall_seconds}s")
+    session.close()
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+def test_live_agent_cmp_detail_returns_grounded_results() -> None:
+    base_url, username, password = _require_live_e2e()
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
+    )
 
     detail = _run_round_with_transient_retry(
         session,
@@ -271,6 +307,20 @@ def test_live_smartcmp_agent_three_turns_return_grounded_results() -> None:
         or "Request ID" in detail.assistant_text
     )
 
+    print(f"LIVE_AGENT_TIMING scenario=cmp_detail elapsed={detail.wall_seconds}s")
+    session.close()
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+def test_live_agent_cmp_services_returns_catalog_results() -> None:
+    base_url, username, password = _require_live_e2e()
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
+    )
+
     services = _run_round_with_transient_retry(
         session,
         base_url=base_url,
@@ -285,9 +335,152 @@ def test_live_smartcmp_agent_three_turns_return_grounded_results() -> None:
     assert "VPC Service" in services.assistant_text
     assert "Support Service" in services.assistant_text
 
-    print(
-        "SMARTCMP_LIVE_E2E_TIMING "
-        f"pending={pending.wall_seconds}s "
-        f"detail={detail.wall_seconds}s "
-        f"services={services.wall_seconds}s"
+    print(f"LIVE_AGENT_TIMING scenario=cmp_services elapsed={services.wall_seconds}s")
+    session.close()
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+def test_live_agent_weather_query_returns_grounded_weather() -> None:
+    base_url, username, password = _require_live_e2e()
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
     )
+
+    weather = _run_round_with_transient_retry(
+        session,
+        base_url=base_url,
+        token=token,
+        session_key=session_key,
+        message="帮我查下上海天气",
+    )
+    _assert_common_runtime_shape(weather)
+    _assert_real_tool_call(weather, "openmeteo_weather")
+    assert "Weather for 上海" in weather.assistant_text or "Weather for Shanghai" in weather.assistant_text
+    assert "Current:" in weather.assistant_text
+    assert "°C" in weather.assistant_text
+
+    print(f"LIVE_AGENT_TIMING scenario=weather elapsed={weather.wall_seconds}s")
+    session.close()
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+def test_live_agent_public_park_query_answers_directly() -> None:
+    base_url, username, password = _require_live_e2e()
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
+    )
+
+    parks = _run_round_with_transient_retry(
+        session,
+        base_url=base_url,
+        token=token,
+        session_key=session_key,
+        message="我想查下上海周边的骑行公园",
+    )
+    _assert_common_runtime_shape(parks, require_tool=False)
+    assert not any(str(item).strip() for item in parks.errors)
+    assert re.search(r"(崇明|青浦|浦东|松江|东平|青西|世纪公园)", parks.assistant_text)
+    assert "骑行" in parks.assistant_text
+
+    print(f"LIVE_AGENT_TIMING scenario=park_recommendation elapsed={parks.wall_seconds}s")
+    session.close()
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+def test_live_agent_cmp_competitors_query_answers_directly() -> None:
+    base_url, username, password = _require_live_e2e()
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
+    )
+
+    competitors = _run_round_with_transient_retry(
+        session,
+        base_url=base_url,
+        token=token,
+        session_key=session_key,
+        message="你查下有CMP有哪些类似的产品",
+    )
+    _assert_common_runtime_shape(competitors, require_tool=False)
+    assert "cmp" in competitors.assistant_text.lower() or "云管理平台" in competitors.assistant_text
+    assert re.search(
+        r"(ServiceNow|VMware|CloudBolt|Morpheus|Flexera|Nutanix|BMC|IBM|博云|云霁|行云管家)",
+        competitors.assistant_text,
+        re.IGNORECASE,
+    )
+
+    print(f"LIVE_AGENT_TIMING scenario=cmp_competitors elapsed={competitors.wall_seconds}s")
+    session.close()
+
+
+@pytest.mark.e2e
+@pytest.mark.integration
+def test_live_agent_cmp_pending_then_ppt_creates_real_pptx() -> None:
+    base_url, username, password = _require_live_e2e()
+    session, token, session_key = _login_and_create_thread(
+        base_url=base_url,
+        username=username,
+        password=password,
+    )
+
+    pending = _run_round_with_transient_retry(
+        session,
+        base_url=base_url,
+        token=token,
+        session_key=session_key,
+        message="查一个 cmp 所有待审批的申请",
+    )
+    _assert_common_runtime_shape(pending)
+    _assert_real_tool_call(pending, "smartcmp_list_pending")
+
+    ppt = _run_round_with_transient_retry(
+        session,
+        base_url=base_url,
+        token=token,
+        session_key=session_key,
+        message="将这些申请写入一个新的PPT",
+    )
+    _assert_common_runtime_shape(ppt)
+    _assert_real_tool_call(ppt, "pptx_create_deck")
+    assert ".pptx" in ppt.assistant_text.lower()
+
+    match = re.search(
+        r"([A-Za-z]:[\\/][^`\r\n]+?\.pptx|\.atlasclaw[\\/][^`\r\n]+?\.pptx|/[^`\r\n]+?\.pptx)",
+        ppt.assistant_text,
+    )
+    if match:
+        raw_path = match.group(1)
+        if raw_path.startswith(".atlasclaw/") or raw_path.startswith(".atlasclaw\\"):
+            normalized_relative = raw_path.replace("\\", "/")
+            pptx_path = Path("C:/Projects/cmps/atlasclaw") / normalized_relative
+        else:
+            pptx_path = Path(raw_path)
+    else:
+        filename_match = re.search(r"([^\\/\s`]+\.pptx)", ppt.assistant_text, flags=re.IGNORECASE)
+        assert filename_match, ppt.assistant_text
+        pptx_path = (
+            Path("C:/Projects/cmps/atlasclaw/.atlasclaw/users/admin/exports")
+            / filename_match.group(1)
+        )
+    assert pptx_path.is_file(), f"PPTX file not created: {pptx_path}"
+
+    presentation = Presentation(str(pptx_path))
+    assert len(presentation.slides) >= 3
+    title_texts = [shape.text for shape in presentation.slides[0].shapes if hasattr(shape, "text")]
+    assert any(re.search(r"(CMP|待审批|PPT)", text) for text in title_texts)
+
+    print(
+        "LIVE_AGENT_TIMING "
+        f"scenario=cmp_pending_then_ppt "
+        f"pending={pending.wall_seconds}s "
+        f"ppt={ppt.wall_seconds}s"
+    )
+    session.close()

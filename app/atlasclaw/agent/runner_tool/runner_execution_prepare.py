@@ -3,19 +3,27 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime
 import logging
+from pathlib import Path
 import time
 from typing import Any, AsyncIterator, Optional
 
 from app.atlasclaw.agent.prompt_builder import PromptMode
 from app.atlasclaw.agent.context_pruning import prune_context_messages, should_apply_context_pruning
 from app.atlasclaw.agent.context_window_guard import evaluate_context_window_guard
-from app.atlasclaw.agent.runner_prompt_context import build_system_prompt, collect_tool_groups_snapshot, collect_tools_snapshot
+from app.atlasclaw.agent.runner_prompt_context import (
+    build_system_prompt,
+    collect_capability_index_snapshot,
+    collect_tool_groups_snapshot,
+    collect_tools_snapshot,
+)
 from app.atlasclaw.agent.runner_tool.runner_llm_routing import (
-    build_llm_first_intent_plan,
-    resolve_artifact_goal,
+    build_llm_first_guidance_plan,
+    resolve_artifact_goal_from_intent_plan,
+    selected_capability_ids_from_intent_plan,
 )
 from app.atlasclaw.agent.runner_tool.runner_tool_projection import (
     DEFAULT_COORDINATION_TOOL_NAMES,
+    compress_candidate_toolset,
     project_minimal_toolset,
     turn_action_requires_tool_execution,
 )
@@ -27,6 +35,7 @@ from app.atlasclaw.agent.tool_gate_models import (
     ToolGateDecision,
     ToolIntentAction,
     ToolIntentPlan,
+    ToolPolicyMode,
 )
 from app.atlasclaw.core.deps import SkillDeps
 
@@ -39,14 +48,27 @@ def select_execution_prompt_mode(
     intent_action: str,
     is_follow_up: bool,
     projected_tool_count: int,
+    has_target_md_skill: bool = False,
 ) -> PromptMode:
     """Choose a lighter prompt for explicit tool turns with a small projected toolset."""
     normalized_action = str(intent_action or "").strip().lower()
+    safe_projected_count = max(0, int(projected_tool_count or 0))
+    if has_target_md_skill:
+        return PromptMode.MINIMAL
+    if not normalized_action and safe_projected_count == 0:
+        return PromptMode.MINIMAL
+    if (
+        normalized_action in {
+            ToolIntentAction.DIRECT_ANSWER.value,
+            ToolIntentAction.ASK_CLARIFICATION.value,
+        }
+        and safe_projected_count == 0
+    ):
+        return PromptMode.MINIMAL
     if normalized_action != ToolIntentAction.USE_TOOLS.value:
         return PromptMode.FULL
     if is_follow_up:
         return PromptMode.FULL
-    safe_projected_count = max(0, int(projected_tool_count or 0))
     if 0 < safe_projected_count <= 12:
         return PromptMode.MINIMAL
     return PromptMode.FULL
@@ -57,11 +79,18 @@ def select_explicit_tool_execution_target(
     intent_plan: ToolIntentPlan | None,
     is_follow_up: bool,
     projected_tools: list[dict[str, Any]],
+    has_target_md_skill: bool = False,
 ) -> Optional[dict[str, Any]]:
     """Return the single direct-execution tool for low-noise explicit tool turns."""
-    if intent_plan is None or intent_plan.action is not ToolIntentAction.USE_TOOLS:
+    actionable_turn = (
+        intent_plan is not None
+        and intent_plan.action in {ToolIntentAction.USE_TOOLS, ToolIntentAction.CREATE_ARTIFACT}
+    )
+    if not actionable_turn:
         return None
     if is_follow_up:
+        return None
+    if has_target_md_skill:
         return None
 
     candidate_tools: list[dict[str, Any]] = []
@@ -145,6 +174,132 @@ def build_explicit_tool_execution_prompt(
     )
 
 
+def _normalize_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _artifact_classes_for_entry(entry: dict[str, Any]) -> set[str]:
+    return {
+        f"artifact:{str(item).strip().lower()}"
+        for item in (entry.get("artifact_types", []) or [])
+        if str(item).strip()
+    }
+
+
+def _match_selected_md_skill_entry(
+    *,
+    entry: dict[str, Any],
+    selected_capability_ids: set[str],
+    target_skill_names: set[str],
+    target_tool_names: set[str],
+    target_capability_classes: set[str],
+) -> bool:
+    capability_id = _normalize_text(entry.get("capability_id", "")).lower()
+    name = _normalize_text(entry.get("name", "")).lower()
+    declared_tool_names = {
+        _normalize_text(item).lower()
+        for item in (entry.get("declared_tool_names", []) or [])
+        if _normalize_text(item)
+    }
+    artifact_classes = _artifact_classes_for_entry(entry)
+
+    if capability_id and capability_id in selected_capability_ids:
+        return True
+    if name and name in target_skill_names:
+        return True
+    if declared_tool_names and declared_tool_names.intersection(target_tool_names):
+        return True
+    if artifact_classes and artifact_classes.intersection(target_capability_classes):
+        return True
+    return False
+
+
+def _load_target_md_skill_content(
+    *,
+    file_path: str,
+    max_file_bytes: int,
+) -> tuple[str, bool]:
+    normalized_path = _normalize_text(file_path)
+    if not normalized_path:
+        return "", False
+
+    try:
+        raw = Path(normalized_path).read_bytes()
+    except Exception:
+        return "", False
+
+    safe_limit = max(1, int(max_file_bytes or 0))
+    if len(raw) <= safe_limit:
+        return raw.decode("utf-8", errors="replace"), False
+    return raw[:safe_limit].decode("utf-8", errors="replace"), True
+
+
+def resolve_selected_md_skill_target(
+    *,
+    agent: Any,
+    deps: SkillDeps,
+    intent_plan: ToolIntentPlan | None,
+    max_file_bytes: int,
+) -> Optional[dict[str, Any]]:
+    """Resolve the selected markdown skill for stage-two prompt expansion."""
+    if intent_plan is None:
+        return None
+
+    capability_index = collect_capability_index_snapshot(agent=agent, deps=deps)
+    if not capability_index:
+        return None
+
+    selected_capability_ids = {
+        _normalize_text(item).lower()
+        for item in selected_capability_ids_from_intent_plan(intent_plan)
+        if _normalize_text(item)
+    }
+    target_skill_names = {
+        _normalize_text(item).lower()
+        for item in (intent_plan.target_skill_names or [])
+        if _normalize_text(item)
+    }
+    target_tool_names = {
+        _normalize_text(item).lower()
+        for item in (intent_plan.target_tool_names or [])
+        if _normalize_text(item)
+    }
+    target_capability_classes = {
+        _normalize_text(item).lower()
+        for item in (intent_plan.target_capability_classes or [])
+        if _normalize_text(item)
+    }
+
+    for entry in capability_index:
+        if not isinstance(entry, dict):
+            continue
+        if _normalize_text(entry.get("kind", "")).lower() != "md_skill":
+            continue
+        file_path = _normalize_text(entry.get("locator", ""))
+        if not file_path:
+            continue
+        if not _match_selected_md_skill_entry(
+            entry=entry,
+            selected_capability_ids=selected_capability_ids,
+            target_skill_names=target_skill_names,
+            target_tool_names=target_tool_names,
+            target_capability_classes=target_capability_classes,
+        ):
+            continue
+        content, truncated = _load_target_md_skill_content(
+            file_path=file_path,
+            max_file_bytes=max_file_bytes,
+        )
+        return {
+            "provider": _normalize_text(entry.get("provider_type", "")),
+            "qualified_name": _normalize_text(entry.get("name", "")),
+            "file_path": file_path,
+            "content": content,
+            "content_truncated": truncated,
+        }
+    return None
+
+
 class RunnerExecutionPreparePhaseMixin:
     async def _run_prepare_phase(self, *, state: dict[str, Any], _log_step: Any) -> AsyncIterator[StreamEvent]:
         """Prepare runtime/session/prompt/tool-gate phase before model loop."""
@@ -200,10 +355,10 @@ class RunnerExecutionPreparePhaseMixin:
         all_available_tools = state.get("all_available_tools")
         tool_groups_snapshot = state.get("tool_groups_snapshot")
         available_tools = state.get("available_tools")
-        planner_available_tools = state.get("planner_available_tools")
+        candidate_visible_tools = state.get("candidate_visible_tools")
         toolset_filter_trace = state.get("toolset_filter_trace")
         tool_projection_trace = state.get("tool_projection_trace")
-        planner_tool_projection_trace = state.get("planner_tool_projection_trace")
+        candidate_tool_compression_trace = state.get("candidate_tool_compression_trace")
         used_toolset_fallback = state.get("used_toolset_fallback")
         provider_hint_docs = state.get("provider_hint_docs")
         skill_hint_docs = state.get("skill_hint_docs")
@@ -385,17 +540,6 @@ class RunnerExecutionPreparePhaseMixin:
                 raw_user_message=user_message,
                 resolved_tool_request=tool_request_message,
             )
-            artifact_goal = resolve_artifact_goal(tool_request_message)
-            if isinstance(deps.extra, dict):
-                if artifact_goal is not None:
-                    deps.extra["artifact_goal"] = dict(artifact_goal)
-                else:
-                    deps.extra.pop("artifact_goal", None)
-            _log_step(
-                "artifact_goal_resolved",
-                artifact_kind=str((artifact_goal or {}).get("kind", "") or ""),
-                artifact_label=str((artifact_goal or {}).get("label", "") or ""),
-            )
             metadata_candidates = self._recall_provider_skill_candidates_from_metadata(
                 user_message=tool_request_message,
                 recent_history=message_history,
@@ -449,33 +593,105 @@ class RunnerExecutionPreparePhaseMixin:
             )
             if metadata_tool_intent_plan is not None:
                 _log_step(
-                    "tool_intent_metadata_hint_resolved",
+                    "tool_metadata_hint_resolved",
                     action=metadata_tool_intent_plan.action.value,
                     target_provider_types=list(metadata_tool_intent_plan.target_provider_types),
                     target_skill_names=list(metadata_tool_intent_plan.target_skill_names),
                     target_capability_classes=list(metadata_tool_intent_plan.target_capability_classes),
                     target_tool_names=list(metadata_tool_intent_plan.target_tool_names),
                 )
-            tool_intent_plan = build_llm_first_intent_plan(
+            available_tools, candidate_compression_trace = compress_candidate_toolset(
+                allowed_tools=available_tools,
+                metadata_candidates=metadata_candidates,
+                used_follow_up_context=used_follow_up_context,
+            )
+            candidate_visible_tools = list(available_tools)
+            candidate_tool_compression_trace = dict(candidate_compression_trace)
+            if isinstance(deps.extra, dict):
+                deps.extra["candidate_tool_compression_trace"] = dict(candidate_compression_trace)
+            _log_step(
+                "candidate_toolset_compressed",
+                before_count=int(candidate_compression_trace.get("before_count", 0) or 0),
+                after_count=int(candidate_compression_trace.get("after_count", 0) or 0),
+                reason=str(candidate_compression_trace.get("reason", "") or ""),
+                coordination_tools=list(candidate_compression_trace.get("coordination_tools", []) or []),
+            )
+            explicit_capability_match = self._metadata_plan_represents_explicit_capability_match(
+                metadata_candidates=metadata_candidates,
+                metadata_plan=metadata_tool_intent_plan,
+                available_tools=available_tools,
+            )
+            tool_intent_plan = build_llm_first_guidance_plan(
                 user_message=tool_request_message,
                 metadata_plan=metadata_tool_intent_plan,
+                explicit_capability_match=explicit_capability_match,
+            )
+            artifact_goal = resolve_artifact_goal_from_intent_plan(metadata_tool_intent_plan)
+            if isinstance(deps.extra, dict):
+                if artifact_goal is not None:
+                    deps.extra["artifact_goal"] = dict(artifact_goal)
+                else:
+                    deps.extra.pop("artifact_goal", None)
+            _log_step(
+                "artifact_goal_resolved",
+                artifact_kind=str((artifact_goal or {}).get("kind", "") or ""),
+                artifact_label=str((artifact_goal or {}).get("label", "") or ""),
+                source="metadata_capability",
             )
             if isinstance(deps.extra, dict):
-                deps.extra["tool_intent_plan"] = tool_intent_plan.model_dump(mode="python")
+                if tool_intent_plan is not None:
+                    deps.extra["tool_intent_plan"] = tool_intent_plan.model_dump(mode="python")
+                else:
+                    deps.extra.pop("tool_intent_plan", None)
             _log_step(
-                "tool_intent_planned",
-                action=tool_intent_plan.action.value,
-                target_provider_types=list(tool_intent_plan.target_provider_types),
-                target_skill_names=list(tool_intent_plan.target_skill_names),
-                target_group_ids=list(tool_intent_plan.target_group_ids),
-                target_capability_classes=list(tool_intent_plan.target_capability_classes),
-                target_tool_names=list(tool_intent_plan.target_tool_names),
-                missing_inputs=list(tool_intent_plan.missing_inputs),
+                "routing_guidance_built",
+                enabled=tool_intent_plan is not None,
+                action=(
+                    tool_intent_plan.action.value
+                    if tool_intent_plan is not None
+                    else ""
+                ),
+                target_provider_types=list(tool_intent_plan.target_provider_types or [])
+                if tool_intent_plan is not None
+                else [],
+                target_skill_names=list(tool_intent_plan.target_skill_names or [])
+                if tool_intent_plan is not None
+                else [],
+                target_group_ids=list(tool_intent_plan.target_group_ids or [])
+                if tool_intent_plan is not None
+                else [],
+                target_capability_classes=list(tool_intent_plan.target_capability_classes or [])
+                if tool_intent_plan is not None
+                else [],
+                target_tool_names=list(tool_intent_plan.target_tool_names or [])
+                if tool_intent_plan is not None
+                else [],
+                missing_inputs=list(tool_intent_plan.missing_inputs or [])
+                if tool_intent_plan is not None
+                else [],
             )
+            if tool_intent_plan is None and not explicit_capability_match:
+                available_tools = []
+                _log_step(
+                    "direct_answer_tools_hidden",
+                    reason="no_strong_capability_match",
+                )
 
-            tool_gate_decision = self._normalize_tool_gate_decision(
-                self._build_tool_gate_decision_from_intent_plan(tool_intent_plan)
-            )
+            if tool_intent_plan is not None:
+                tool_gate_decision = self._normalize_tool_gate_decision(
+                    self._build_tool_gate_decision_from_intent_plan(tool_intent_plan)
+                )
+            else:
+                tool_gate_decision = self._normalize_tool_gate_decision(
+                    ToolGateDecision(
+                        needs_tool=False,
+                        reason=(
+                            "LLM-first runtime routing is active. The main model decides this "
+                            "turn after capability pruning."
+                        ),
+                        policy=ToolPolicyMode.ANSWER_DIRECT,
+                    )
+                )
             available_tools, tool_projection_trace = project_minimal_toolset(
                 allowed_tools=available_tools,
                 intent_plan=tool_intent_plan,
@@ -491,10 +707,7 @@ class RunnerExecutionPreparePhaseMixin:
                 deps.extra["tool_projection_trace"] = dict(tool_projection_trace)
                 deps.extra["tools_snapshot"] = list(available_tools)
                 deps.extra["tools_snapshot_authoritative"] = True
-                if tool_intent_plan.action is ToolIntentAction.USE_TOOLS:
-                    deps.extra["runtime_allowed_tool_names"] = list(runtime_allowed_tool_names)
-                else:
-                    deps.extra.pop("runtime_allowed_tool_names", None)
+                deps.extra["runtime_allowed_tool_names"] = list(runtime_allowed_tool_names)
                 deps.extra["tool_groups_snapshot"] = self._build_filtered_group_map(
                     tool_groups_snapshot,
                     available_tools,
@@ -507,13 +720,42 @@ class RunnerExecutionPreparePhaseMixin:
                 reason=str(tool_projection_trace.get("reason", "") or ""),
                 coordination_tools=list(tool_projection_trace.get("coordination_tools", []) or []),
             )
+            target_md_skill = None
+            if turn_action_requires_tool_execution(tool_intent_plan):
+                target_md_skill = resolve_selected_md_skill_target(
+                    agent=runtime_agent or self.agent,
+                    deps=deps,
+                    intent_plan=tool_intent_plan,
+                    max_file_bytes=int(
+                        getattr(self.prompt_builder.config, "md_skills_max_file_bytes", 262144)
+                        or 262144
+                    ),
+                )
+            if isinstance(deps.extra, dict):
+                if isinstance(target_md_skill, dict):
+                    deps.extra["target_md_skill"] = dict(target_md_skill)
+                else:
+                    deps.extra.pop("target_md_skill", None)
+            _log_step(
+                "target_md_skill_resolved",
+                enabled=bool(target_md_skill),
+                qualified_name=(
+                    str(target_md_skill.get("qualified_name", "") or "")
+                    if isinstance(target_md_skill, dict)
+                    else ""
+                ),
+                loaded_content=bool(
+                    isinstance(target_md_skill, dict)
+                    and str(target_md_skill.get("content", "") or "").strip()
+                ),
+            )
             tool_match_result = CapabilityMatcher(available_tools=available_tools).match(
                 tool_gate_decision.suggested_tool_classes
             )
             logger.warning(
                 "tool_intent decision: session=%s action=%s policy=%s needs_external=%s needs_live_data=%s suggested=%s candidates=%s",
                 session_key,
-                tool_intent_plan.action.value,
+                tool_intent_plan.action.value if tool_intent_plan is not None else "llm_first",
                 tool_gate_decision.policy.value,
                 bool(tool_gate_decision.needs_external_system),
                 bool(tool_gate_decision.needs_live_data),
@@ -526,7 +768,7 @@ class RunnerExecutionPreparePhaseMixin:
             )
             _log_step(
                 "tool_gate_decided",
-                action=tool_intent_plan.action.value,
+                action=tool_intent_plan.action.value if tool_intent_plan is not None else "llm_first",
                 policy=tool_gate_decision.policy.value,
                 needs_tool=bool(tool_gate_decision.needs_tool),
                 needs_external=bool(tool_gate_decision.needs_external_system),
@@ -550,14 +792,16 @@ class RunnerExecutionPreparePhaseMixin:
                 reasoning_retry_limit=reasoning_retry_limit,
             )
             prompt_mode = select_execution_prompt_mode(
-                intent_action=tool_intent_plan.action.value,
+                intent_action=tool_intent_plan.action.value if tool_intent_plan is not None else "",
                 is_follow_up=used_follow_up_context,
                 projected_tool_count=len(available_tools),
+                has_target_md_skill=bool(target_md_skill),
             )
             explicit_tool_execution_target = select_explicit_tool_execution_target(
                 intent_plan=tool_intent_plan,
                 is_follow_up=used_follow_up_context,
                 projected_tools=available_tools,
+                has_target_md_skill=bool(target_md_skill),
             )
             _log_step(
                 "execution_prompt_mode_selected",
@@ -776,10 +1020,10 @@ class RunnerExecutionPreparePhaseMixin:
                 "all_available_tools": all_available_tools,
                 "tool_groups_snapshot": tool_groups_snapshot,
                 "available_tools": available_tools,
-                "planner_available_tools": planner_available_tools or list(available_tools),
+                "candidate_visible_tools": candidate_visible_tools or list(available_tools),
                 "toolset_filter_trace": toolset_filter_trace,
                 "tool_projection_trace": tool_projection_trace,
-                "planner_tool_projection_trace": planner_tool_projection_trace,
+                "candidate_tool_compression_trace": candidate_tool_compression_trace,
                 "used_toolset_fallback": used_toolset_fallback,
                 "provider_hint_docs": provider_hint_docs,
                 "skill_hint_docs": skill_hint_docs,
@@ -789,33 +1033,6 @@ class RunnerExecutionPreparePhaseMixin:
                 "artifact_goal": artifact_goal,
                 "prompt_mode": prompt_mode,
             })
-
-    @staticmethod
-    def _filter_hint_docs_for_planner_tools(
-        *,
-        hint_docs: list[dict[str, Any]],
-        planner_available_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        planner_tool_names = {
-            str(tool.get("name", "") or "").strip()
-            for tool in planner_available_tools
-            if isinstance(tool, dict) and str(tool.get("name", "") or "").strip()
-        }
-        if not planner_tool_names:
-            return []
-        filtered: list[dict[str, Any]] = []
-        for doc in hint_docs or []:
-            if not isinstance(doc, dict):
-                continue
-            tool_names = {
-                str(item).strip()
-                for item in (doc.get("tool_names", []) or [])
-                if str(item).strip()
-            }
-            if tool_names and not tool_names.intersection(planner_tool_names):
-                continue
-            filtered.append(doc)
-        return filtered
 
     @staticmethod
     def _build_runtime_message_history_for_turn(

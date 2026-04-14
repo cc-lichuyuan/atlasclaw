@@ -196,19 +196,6 @@ class HooksRuntimeConfig(BaseModel):
     script_handlers: list[HookScriptHandlerConfig] = Field(default_factory=list)
 
 
-class ToolGateConfig(BaseModel):
-    """Tool-necessity gate runtime configuration."""
-
-    enable_model_classifier: bool = Field(
-        default=True,
-        description=(
-            "Whether the runtime may perform a dedicated model-backed classification pass "
-            "before the primary answer run. Enabled by default to reduce long reasoning-only "
-            "loops for tool-required requests."
-        ),
-    )
-
-
 class SearchProxyConfig(BaseModel):
     """Proxy settings for provider-driven web search."""
 
@@ -480,7 +467,6 @@ class AtlasClawConfig(BaseModel):
     reset: ResetConfig = Field(default_factory=ResetConfig)
     webhook: WebhookConfig = Field(default_factory=WebhookConfig)
     hooks_runtime: HooksRuntimeConfig = Field(default_factory=HooksRuntimeConfig)
-    tool_gate: ToolGateConfig = Field(default_factory=ToolGateConfig)
     search_runtime: SearchRuntimeConfig = Field(default_factory=SearchRuntimeConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
 

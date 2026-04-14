@@ -16,6 +16,7 @@ from app.atlasclaw.agent.runner_prompt_context import (
 )
 from app.atlasclaw.agent.runner_tool.runner_execution_prepare import (
     build_explicit_tool_execution_prompt,
+    resolve_selected_md_skill_target,
     select_execution_prompt_mode,
     select_explicit_tool_execution_target,
 )
@@ -104,7 +105,7 @@ def test_collect_tools_snapshot_preserves_normalized_metadata_from_deps() -> Non
                         },
                         "required": ["identifier"],
                     },
-                    "planner_visibility": "always",
+                    "routing_visibility": "always",
                     "aliases": ["cmp", "smartcmp approvals"],
                     "keywords": ["approval", "pending"],
                     "use_when": ["User asks for pending approvals"],
@@ -132,7 +133,7 @@ def test_collect_tools_snapshot_preserves_normalized_metadata_from_deps() -> Non
                 },
                 "required": ["identifier"],
             },
-            "planner_visibility": "always",
+            "routing_visibility": "always",
             "aliases": ["cmp", "smartcmp approvals"],
             "keywords": ["approval", "pending"],
             "use_when": ["User asks for pending approvals"],
@@ -268,7 +269,7 @@ def test_collect_tools_snapshot_preserves_runtime_tool_metadata_fields() -> None
                 "source": "builtin",
                 "group_ids": ["group:web"],
                 "capability_class": "weather",
-                "planner_visibility": "contextual",
+                "routing_visibility": "contextual",
                 "aliases": ["weather", "forecast"],
                 "keywords": ["天气", "预报", "temperature"],
                 "use_when": ["User asks for a forecast by place and date"],
@@ -288,7 +289,7 @@ def test_collect_tools_snapshot_preserves_runtime_tool_metadata_fields() -> None
             "source": "builtin",
             "group_ids": ["group:web"],
             "capability_class": "weather",
-            "planner_visibility": "contextual",
+            "routing_visibility": "contextual",
             "aliases": ["weather", "forecast"],
             "keywords": ["天气", "预报", "temperature"],
             "use_when": ["User asks for a forecast by place and date"],
@@ -310,7 +311,7 @@ def test_collect_tools_snapshot_does_not_stringify_none_provider_metadata() -> N
                     "source": "builtin",
                     "group_ids": ["group:web"],
                     "capability_class": "web_search",
-                    "planner_visibility": "general",
+                    "routing_visibility": "general",
                 }
             ],
             "skills_snapshot": [
@@ -322,7 +323,7 @@ def test_collect_tools_snapshot_does_not_stringify_none_provider_metadata() -> N
                     "source": "builtin",
                     "group_ids": ["group:web"],
                     "capability_class": "web_search",
-                    "planner_visibility": "general",
+                    "routing_visibility": "general",
                 }
             ],
             "md_skills_snapshot": [],
@@ -339,7 +340,7 @@ def test_collect_tools_snapshot_does_not_stringify_none_provider_metadata() -> N
             "source": "builtin",
             "group_ids": ["group:web"],
             "capability_class": "web_search",
-            "planner_visibility": "general",
+            "routing_visibility": "general",
         }
     ]
 
@@ -380,6 +381,12 @@ def test_collect_capability_index_snapshot_orders_sources_and_omits_bodies() -> 
                     "qualified_name": "jira:search",
                     "description": "Search Jira",
                     "file_path": "/skills/jira/SKILL.md",
+                    "provider": "jira",
+                    "metadata": {
+                        "tool_name": "jira_search",
+                        "triggers": ["jira", "issue"],
+                        "use_when": ["User asks for Jira issues"],
+                    },
                     "body": "FULL BODY SHOULD NOT APPEAR",
                 }
             ],
@@ -388,6 +395,7 @@ def test_collect_capability_index_snapshot_orders_sources_and_omits_bodies() -> 
                     "name": "archive_issue",
                     "description": "Archive issue",
                     "location": "built-in",
+                    "keywords": ["archive"],
                 }
             ],
         }
@@ -402,7 +410,66 @@ def test_collect_capability_index_snapshot_orders_sources_and_omits_bodies() -> 
     assert snapshot[0]["locator"] == "/skills/jira/SKILL.md"
     assert snapshot[1]["locator"] == "web_search(query?)"
     assert snapshot[2]["locator"] == "built-in"
+    assert snapshot[0]["provider_type"] == "jira"
+    assert snapshot[0]["declared_tool_names"] == ["jira_search", "jira"]
+    assert snapshot[0]["input_hints"][:2] == ["jira", "issue"]
+    assert snapshot[1]["declared_tool_names"] == ["web_search"]
     assert all("body" not in item for item in snapshot)
+
+
+def test_collect_capability_index_snapshot_uses_explicit_md_tool_artifact_capability() -> None:
+    deps = SimpleNamespace(
+        extra={
+            "tools_snapshot_authoritative": True,
+            "tools_snapshot": [],
+            "md_skills_snapshot": [
+                {
+                    "name": "exporter",
+                    "qualified_name": "files:exporter",
+                    "description": "Export the current result set.",
+                    "file_path": "/skills/exporter/SKILL.md",
+                    "provider": "",
+                    "metadata": {
+                        "tool_create_name": "pdf_create_document",
+                        "tool_create_capability_class": "artifact:pdf",
+                    },
+                }
+            ],
+            "skills_snapshot": [],
+        }
+    )
+
+    snapshot = collect_capability_index_snapshot(agent=SimpleNamespace(tools=[]), deps=deps)
+
+    assert snapshot[0]["capability_id"] == "skill:files:exporter"
+    assert snapshot[0]["artifact_types"] == ["pdf"]
+
+
+def test_collect_capability_index_snapshot_does_not_infer_artifacts_from_plain_text_tokens() -> None:
+    deps = SimpleNamespace(
+        extra={
+            "tools_snapshot_authoritative": True,
+            "tools_snapshot": [
+                {
+                    "name": "presentation_helper",
+                    "description": "Create PPT decks for reviews.",
+                    "parameters_schema": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                        },
+                    },
+                }
+            ],
+            "md_skills_snapshot": [],
+            "skills_snapshot": [],
+        }
+    )
+
+    snapshot = collect_capability_index_snapshot(agent=SimpleNamespace(tools=[]), deps=deps)
+
+    assert snapshot[0]["capability_id"] == "tool:presentation_helper"
+    assert snapshot[0]["artifact_types"] == []
 
 
 def test_build_system_prompt_uses_unified_capability_index_surface(tmp_path) -> None:
@@ -457,6 +524,7 @@ def test_build_system_prompt_uses_unified_capability_index_surface(tmp_path) -> 
 
     assert "## Capabilities" in prompt
     assert "skill:jira:search" in prompt
+    assert "provider:jira" in prompt
     assert "## Built-in Tools (Use ONLY if no MD Skill matches)" not in prompt
     assert "<available_skills>" not in prompt
     assert "FULL BODY SHOULD NOT APPEAR" not in prompt
@@ -500,6 +568,27 @@ def test_select_execution_prompt_mode_uses_minimal_for_small_explicit_toolset() 
     assert mode is PromptMode.MINIMAL
 
 
+def test_select_execution_prompt_mode_uses_minimal_for_direct_answer_without_visible_tools() -> None:
+    mode = select_execution_prompt_mode(
+        intent_action="direct_answer",
+        is_follow_up=False,
+        projected_tool_count=0,
+    )
+
+    assert mode is PromptMode.MINIMAL
+
+
+def test_select_execution_prompt_mode_uses_minimal_when_target_md_skill_selected() -> None:
+    mode = select_execution_prompt_mode(
+        intent_action="create_artifact",
+        is_follow_up=True,
+        projected_tool_count=1,
+        has_target_md_skill=True,
+    )
+
+    assert mode is PromptMode.MINIMAL
+
+
 def test_select_execution_prompt_mode_keeps_full_for_follow_up_tool_turn() -> None:
     mode = select_execution_prompt_mode(
         intent_action="use_tools",
@@ -531,6 +620,93 @@ def test_select_explicit_tool_execution_target_returns_single_tool_only_candidat
 
     assert target is not None
     assert target["name"] == "openmeteo_weather"
+
+
+def test_select_explicit_tool_execution_target_allows_explicit_create_artifact_tool() -> None:
+    target = select_explicit_tool_execution_target(
+        intent_plan=ToolIntentPlan(
+            action=ToolIntentAction.CREATE_ARTIFACT,
+            target_tool_names=["pptx_create_deck"],
+            target_capability_classes=["artifact:pptx"],
+        ),
+        is_follow_up=False,
+        projected_tools=[
+            {
+                "name": "pptx_create_deck",
+                "description": "Create a PPTX deck",
+                "result_mode": "tool_only_ok",
+                "capability_class": "artifact:pptx",
+            }
+        ],
+    )
+
+    assert target is not None
+    assert target["name"] == "pptx_create_deck"
+
+
+def test_select_explicit_tool_execution_target_skips_when_target_md_skill_is_loaded() -> None:
+    target = select_explicit_tool_execution_target(
+        intent_plan=ToolIntentPlan(
+            action=ToolIntentAction.CREATE_ARTIFACT,
+            target_tool_names=["pptx_create_deck"],
+            target_skill_names=["pptx"],
+        ),
+        is_follow_up=False,
+        projected_tools=[
+            {
+                "name": "pptx_create_deck",
+                "description": "Create a PPTX deck",
+                "result_mode": "tool_only_ok",
+                "capability_class": "artifact:pptx",
+            }
+        ],
+        has_target_md_skill=True,
+    )
+
+    assert target is None
+
+
+def test_resolve_selected_md_skill_target_loads_only_matching_skill_body(tmp_path) -> None:
+    skill_dir = tmp_path / "pptx"
+    skill_dir.mkdir()
+    skill_path = skill_dir / "SKILL.md"
+    skill_path.write_text("# PPTX Skill\n\nCreate PPTX decks.", encoding="utf-8")
+    deps = SimpleNamespace(
+        extra={
+            "md_skills_snapshot": [
+                {
+                    "name": "pptx",
+                    "qualified_name": "pptx",
+                    "description": "Create PPTX decks",
+                    "file_path": str(skill_path),
+                    "provider": "",
+                    "metadata": {
+                        "tool_name": "pptx_create_deck",
+                        "capability_class": "artifact:pptx",
+                        "triggers": ["pptx"],
+                        "use_when": ["User asks for PPTX output"],
+                    },
+                }
+            ]
+        }
+    )
+
+    target = resolve_selected_md_skill_target(
+        agent=SimpleNamespace(tools=[]),
+        deps=deps,
+        intent_plan=ToolIntentPlan(
+            action=ToolIntentAction.CREATE_ARTIFACT,
+            target_skill_names=["pptx"],
+            target_capability_classes=["artifact:pptx"],
+            target_tool_names=["pptx_create_deck"],
+        ),
+        max_file_bytes=1024,
+    )
+
+    assert target is not None
+    assert target["qualified_name"] == "pptx"
+    assert target["file_path"] == str(skill_path)
+    assert "# PPTX Skill" in target["content"]
 
 
 def test_select_explicit_tool_execution_target_skips_follow_up_and_non_terminal_tools() -> None:

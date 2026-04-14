@@ -73,7 +73,6 @@ class AgentRunner(RunnerExecutionMixin, RunnerToolGateMixin, RunnerToolEvidenceM
         agent_pool: Optional["AgentInstancePool"] = None,
         token_interceptor: Optional["TokenHealthInterceptor"] = None,
         agent_factory: Optional[Any] = None,
-        tool_gate_model_classifier_enabled: bool = True,
         context_pruning_settings: Optional[ContextPruningSettings] = None,
     ):
         """Initialize the agent runner.
@@ -106,7 +105,6 @@ class AgentRunner(RunnerExecutionMixin, RunnerToolGateMixin, RunnerToolEvidenceM
         self.agent_pool = agent_pool
         self.token_interceptor = token_interceptor
         self.agent_factory = agent_factory
-        self.tool_gate_model_classifier_enabled = tool_gate_model_classifier_enabled
         self.context_pruning_settings = context_pruning_settings or ContextPruningSettings()
         self.history = HistoryMemoryCoordinator(session_manager_router or self.sessions, self.compaction)
         self.runtime_events = RuntimeEventDispatcher(self.hooks, self.queue, hook_runtime)

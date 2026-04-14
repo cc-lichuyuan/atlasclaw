@@ -11,6 +11,7 @@
 - metadata recall 只保留为候选压缩和提示，不再短路主路由
 - follow-up 默认承接上文，不因为 `use_tools` 而丢失上下文
 - 工具执行完成后，必须检查“用户目标是否真的完成”，而不是“返回了结构化数据就算成功”
+- Core routing logic must not rely on keyword-hardcoded artifact/provider/tool-family classifiers; new capability types must flow through explicit capability metadata, not phrase lists in core code
 
 ---
 

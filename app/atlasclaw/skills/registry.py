@@ -103,7 +103,7 @@ class SkillMetadata(BaseModel):
     capability_class: str = ""
     priority: int = 100
     parameters_schema: dict[str, Any] = Field(default_factory=dict)
-    planner_visibility: str = "contextual"
+    routing_visibility: str = "contextual"
     aliases: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     use_when: list[str] = Field(default_factory=list)
@@ -222,7 +222,7 @@ class SkillRegistry:
                 "capability_class": meta.capability_class,
                 "priority": meta.priority,
                 "parameters_schema": self._coerce_parameters_schema(meta.parameters_schema),
-                "planner_visibility": str(meta.planner_visibility or "").strip(),
+                "routing_visibility": str(meta.routing_visibility or "").strip(),
                 "aliases": list(meta.aliases),
                 "keywords": list(meta.keywords),
                 "use_when": list(meta.use_when),
@@ -255,7 +255,7 @@ class SkillRegistry:
                 "capability_class": meta.capability_class,
                 "priority": meta.priority,
                 "parameters_schema": self._coerce_parameters_schema(meta.parameters_schema),
-                "planner_visibility": str(meta.planner_visibility or "").strip(),
+                "routing_visibility": str(meta.routing_visibility or "").strip(),
                 "aliases": list(meta.aliases),
                 "keywords": list(meta.keywords),
                 "use_when": list(meta.use_when),
@@ -285,7 +285,7 @@ class SkillRegistry:
                 "category": meta.category,
                 "location": meta.location,
                 "parameters_schema": self._coerce_parameters_schema(meta.parameters_schema),
-                "planner_visibility": str(meta.planner_visibility or "").strip(),
+                "routing_visibility": str(meta.routing_visibility or "").strip(),
                 "aliases": list(meta.aliases),
                 "keywords": list(meta.keywords),
                 "use_when": list(meta.use_when),

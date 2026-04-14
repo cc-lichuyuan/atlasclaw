@@ -1499,6 +1499,41 @@ def test_should_not_finalize_tool_only_result_when_artifact_goal_is_unsatisfied(
     assert should_finalize is False
 
 
+def test_should_finalize_tool_only_result_when_artifact_goal_uses_generic_result_file_key() -> None:
+    runner = _StreamRunnerWithEvidence()
+
+    should_finalize = runner._should_finalize_from_tool_results(
+        messages=[
+            {"role": "user", "content": "将这些申请整理成一个新的PDF文件"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"id": "tc-1", "name": "pdf_create_document", "args": {}}],
+            },
+            {
+                "role": "tool",
+                "tool_name": "pdf_create_document",
+                "content": {
+                    "result_file": "C:/workspace/exports/pending-approvals.pdf",
+                    "pages": 3,
+                },
+            },
+        ],
+        start_index=1,
+        planned_tool_names=["pdf_create_document"],
+        available_tools=[
+            {
+                "name": "pdf_create_document",
+                "capability_class": "artifact:pdf",
+                "result_mode": "tool_only_ok",
+            }
+        ],
+        artifact_goal={"kind": "pdf", "label": "PDF document"},
+    )
+
+    assert should_finalize is True
+
+
 @pytest.mark.asyncio
 async def test_refresh_messages_after_tool_dispatch_waits_for_new_tool_results() -> None:
     runner = _RefreshingStreamRunner()

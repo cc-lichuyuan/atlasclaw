@@ -511,6 +511,8 @@ Planner-free routing is the default hot path.
 - Include only currently eligible capabilities
 - Keep capability truncation deterministic and observable
 - Treat metadata recall as candidate compression only, not routing authority
+- Routing and capability selection must come from explicit capability metadata, runtime eligibility, and main-model decisions
+- Do not add keyword-hardcoded routers for artifact types, provider types, or tool families; if supporting a new capability requires adding phrase lists in core routing code, the design is wrong
 
 ---
 

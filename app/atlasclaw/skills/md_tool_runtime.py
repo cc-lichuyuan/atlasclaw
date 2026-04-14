@@ -95,6 +95,8 @@ def create_script_wrapper(
         import os
 
         env = os.environ.copy()
+        env.setdefault("PYTHONIOENCODING", "utf-8")
+        env.setdefault("PYTHONUTF8", "1")
 
         if ctx is not None and hasattr(ctx, "deps") and hasattr(ctx.deps, "cookies"):
             cookies = ctx.deps.cookies
@@ -187,6 +189,8 @@ def create_script_wrapper(
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=120,
                 env=env,
                 cwd=str(py_file.parent),

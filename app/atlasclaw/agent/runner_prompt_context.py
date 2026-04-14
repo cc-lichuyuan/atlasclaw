@@ -71,6 +71,9 @@ def collect_capability_index_snapshot(*, agent: Any, deps) -> list[dict]:
 
     for item in collect_md_skills_snapshot(deps):
         name = str(item.get("qualified_name") or item.get("name") or "unknown").strip()
+        metadata = item.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
         capability_index.append(
             {
                 "capability_id": _build_capability_id("md_skill", name or "unknown"),
@@ -78,6 +81,22 @@ def collect_capability_index_snapshot(*, agent: Any, deps) -> list[dict]:
                 "name": name or "unknown",
                 "description": str(item.get("description", "") or "").strip(),
                 "locator": str(item.get("file_path", "") or "").strip() or name or "unknown",
+                "provider_type": _normalize_optional_text(
+                    metadata.get("provider_type", ""),
+                    item.get("provider", ""),
+                    _qualified_name_provider(name),
+                ),
+                "artifact_types": _infer_artifact_types(
+                    name=name,
+                    description=str(item.get("description", "") or "").strip(),
+                    capability_class=_normalize_optional_text(metadata.get("capability_class", "")),
+                    metadata=metadata,
+                ),
+                "declared_tool_names": _extract_md_tool_names(item),
+                "input_hints": _build_capability_input_hints(
+                    keywords=metadata.get("triggers", []),
+                    use_when=metadata.get("use_when", []),
+                ),
             }
         )
 
@@ -91,6 +110,19 @@ def collect_capability_index_snapshot(*, agent: Any, deps) -> list[dict]:
                 "name": tool_name,
                 "description": str(item.get("description", "") or "").strip(),
                 "locator": _format_tool_locator(item),
+                "provider_type": _normalize_optional_text(item.get("provider_type", "")),
+                "artifact_types": _infer_artifact_types(
+                    name=tool_name,
+                    description=str(item.get("description", "") or "").strip(),
+                    capability_class=_normalize_optional_text(item.get("capability_class", "")),
+                    metadata=item,
+                ),
+                "declared_tool_names": [tool_name],
+                "input_hints": _build_capability_input_hints(
+                    keywords=item.get("keywords", []),
+                    use_when=item.get("use_when", []),
+                    parameters_schema=item.get("parameters_schema", {}),
+                ),
             }
         )
 
@@ -108,6 +140,20 @@ def collect_capability_index_snapshot(*, agent: Any, deps) -> list[dict]:
                     str(item.get("location") or item.get("category") or "built-in").strip()
                     or "built-in"
                 ),
+                "provider_type": _normalize_optional_text(item.get("provider_type", "")),
+                "artifact_types": _infer_artifact_types(
+                    name=skill_name,
+                    description=str(item.get("description", "") or "").strip(),
+                    capability_class=_normalize_optional_text(item.get("capability_class", "")),
+                    metadata=item,
+                ),
+                "declared_tool_names": _normalize_string_list(
+                    [item.get("qualified_skill_name", ""), item.get("skill_name", "")]
+                ),
+                "input_hints": _build_capability_input_hints(
+                    keywords=item.get("keywords", []),
+                    use_when=item.get("use_when", []),
+                ),
             }
         )
 
@@ -122,6 +168,81 @@ def _build_capability_id(kind: str, name: str) -> str:
     else:
         prefix = "skill"
     return f"{prefix}:{normalized_name or 'unknown'}"
+
+
+def _infer_artifact_types(
+    *,
+    name: str,
+    description: str,
+    capability_class: str,
+    metadata: dict[str, Any],
+) -> list[str]:
+    artifact_types: list[str] = []
+    explicit_capability = str(capability_class or "").strip().lower()
+    if explicit_capability.startswith("artifact:"):
+        artifact_suffix = explicit_capability.split("artifact:", 1)[-1].strip()
+        if artifact_suffix:
+            artifact_types.append(artifact_suffix)
+
+    explicit_values: list[Any] = []
+    if isinstance(metadata, dict):
+        explicit_values.append(metadata.get("artifact_types"))
+        for key, value in metadata.items():
+            if not str(key or "").strip().lower().endswith("capability_class"):
+                continue
+            explicit_values.append(value)
+
+    for value in explicit_values:
+        if isinstance(value, str):
+            normalized_value = value.strip().lower()
+            if normalized_value.startswith("artifact:"):
+                artifact_suffix = normalized_value.split("artifact:", 1)[-1].strip()
+                if artifact_suffix:
+                    artifact_types.append(artifact_suffix)
+            elif normalized_value:
+                artifact_types.append(normalized_value)
+            continue
+        if isinstance(value, list):
+            for item in value:
+                normalized_item = str(item or "").strip().lower()
+                if not normalized_item:
+                    continue
+                if normalized_item.startswith("artifact:"):
+                    artifact_suffix = normalized_item.split("artifact:", 1)[-1].strip()
+                    if artifact_suffix:
+                        artifact_types.append(artifact_suffix)
+                    continue
+                artifact_types.append(normalized_item)
+    return _normalize_string_list(artifact_types)
+
+
+def _build_capability_input_hints(
+    *,
+    keywords: Any = None,
+    use_when: Any = None,
+    parameters_schema: Any = None,
+    limit: int = 4,
+) -> list[str]:
+    hints: list[str] = []
+    for item in _normalize_string_list(keywords):
+        hints.append(item)
+        if len(hints) >= limit:
+            return hints
+    for item in _normalize_string_list(use_when):
+        hints.append(item)
+        if len(hints) >= limit:
+            return hints
+    if isinstance(parameters_schema, dict):
+        properties = parameters_schema.get("properties")
+        if isinstance(properties, dict):
+            for key in properties.keys():
+                normalized = str(key or "").strip()
+                if not normalized:
+                    continue
+                hints.append(normalized)
+                if len(hints) >= limit:
+                    return hints
+    return _normalize_string_list(hints)[:limit]
 
 
 def collect_target_md_skill(deps) -> Optional[dict]:
@@ -226,7 +347,7 @@ def collect_tools_snapshot(*, agent: Any, deps=None) -> list[dict]:
         skill_name: Any = None,
         qualified_skill_name: Any = None,
         parameters_schema: Any = None,
-        planner_visibility: Any = None,
+        routing_visibility: Any = None,
         aliases: Any = None,
         keywords: Any = None,
         use_when: Any = None,
@@ -289,11 +410,12 @@ def collect_tools_snapshot(*, agent: Any, deps=None) -> list[dict]:
         )
         if normalized_parameters_schema:
             tool_record["parameters_schema"] = normalized_parameters_schema
-        normalized_planner_visibility = _normalize_optional_text(
-            planner_visibility if planner_visibility is not None else indexed_meta.get("planner_visibility", ""),
+        normalized_routing_visibility = _normalize_optional_text(
+            routing_visibility if routing_visibility is not None else indexed_meta.get("routing_visibility", ""),
+            indexed_meta.get("planner_visibility", ""),
         )
-        if normalized_planner_visibility:
-            tool_record["planner_visibility"] = normalized_planner_visibility
+        if normalized_routing_visibility:
+            tool_record["routing_visibility"] = normalized_routing_visibility
         normalized_aliases = _normalize_string_list(
             aliases if aliases is not None else indexed_meta.get("aliases", [])
         )
@@ -350,7 +472,7 @@ def collect_tools_snapshot(*, agent: Any, deps=None) -> list[dict]:
             skill_name=tool.get("skill_name"),
             qualified_skill_name=tool.get("qualified_skill_name"),
             parameters_schema=tool.get("parameters_schema"),
-            planner_visibility=tool.get("planner_visibility"),
+            routing_visibility=tool.get("routing_visibility", tool.get("planner_visibility")),
             aliases=tool.get("aliases"),
             keywords=tool.get("keywords"),
             use_when=tool.get("use_when"),
@@ -372,7 +494,7 @@ def collect_tools_snapshot(*, agent: Any, deps=None) -> list[dict]:
             capability_class = tool.get("capability_class")
             priority = tool.get("priority")
             parameters_schema = tool.get("parameters_schema")
-            planner_visibility = tool.get("planner_visibility")
+            routing_visibility = tool.get("routing_visibility", tool.get("planner_visibility"))
             aliases = tool.get("aliases")
             keywords = tool.get("keywords")
             use_when = tool.get("use_when")
@@ -410,8 +532,10 @@ def collect_tools_snapshot(*, agent: Any, deps=None) -> list[dict]:
                 or getattr(getattr(tool, "metadata", None), "parameters_schema", None)
                 or getattr(tool, "parameters_json_schema", None)
             )
-            planner_visibility = (
-                getattr(tool, "planner_visibility", None)
+            routing_visibility = (
+                getattr(tool, "routing_visibility", None)
+                or getattr(getattr(tool, "metadata", None), "routing_visibility", None)
+                or getattr(tool, "planner_visibility", None)
                 or getattr(getattr(tool, "metadata", None), "planner_visibility", None)
             )
             aliases = (
@@ -444,7 +568,7 @@ def collect_tools_snapshot(*, agent: Any, deps=None) -> list[dict]:
             capability_class=capability_class,
             priority=priority,
             parameters_schema=parameters_schema,
-            planner_visibility=planner_visibility,
+            routing_visibility=routing_visibility,
             aliases=aliases,
             keywords=keywords,
             use_when=use_when,
@@ -469,7 +593,7 @@ def collect_tools_snapshot(*, agent: Any, deps=None) -> list[dict]:
             skill_name=item.get("skill_name"),
             qualified_skill_name=item.get("qualified_skill_name"),
             parameters_schema=item.get("parameters_schema"),
-            planner_visibility=item.get("planner_visibility"),
+            routing_visibility=item.get("routing_visibility", item.get("planner_visibility")),
             aliases=item.get("aliases"),
             keywords=item.get("keywords"),
             use_when=item.get("use_when"),
@@ -558,7 +682,10 @@ def _build_skill_metadata_index(
             "skill_name": _normalize_optional_text(item.get("skill_name", "")),
             "qualified_skill_name": _normalize_optional_text(item.get("qualified_skill_name", "")),
             "parameters_schema": _normalize_parameters_schema(item.get("parameters_schema", {})),
-            "planner_visibility": _normalize_optional_text(item.get("planner_visibility", "")),
+            "routing_visibility": _normalize_optional_text(
+                item.get("routing_visibility", ""),
+                item.get("planner_visibility", ""),
+            ),
             "aliases": _normalize_string_list(item.get("aliases", [])),
             "keywords": _normalize_string_list(item.get("keywords", [])),
             "use_when": _normalize_string_list(item.get("use_when", [])),
@@ -587,7 +714,10 @@ def _build_skill_metadata_index(
                 "priority": _normalize_priority(metadata.get("priority")),
                 "skill_name": _normalize_optional_text(entry.get("name", "")),
                 "qualified_skill_name": _normalize_optional_text(entry.get("qualified_name", "")),
-                "planner_visibility": _normalize_optional_text(metadata.get("planner_visibility", "")),
+                "routing_visibility": _normalize_optional_text(
+                    metadata.get("routing_visibility", ""),
+                    metadata.get("planner_visibility", ""),
+                ),
                 "aliases": _normalize_string_list(
                     [entry.get("qualified_name", ""), metadata.get("tool_aliases", [])]
                 ),
@@ -620,7 +750,14 @@ def _extract_md_tool_names(entry: dict) -> list[str]:
     fallback_name = str(entry.get("name", "")).strip()
     if fallback_name and fallback_name not in names:
         names.append(fallback_name)
-    return names
+    return _normalize_string_list(names)
+
+
+def _qualified_name_provider(qualified_name: str) -> str:
+    normalized = str(qualified_name or "").strip()
+    if ":" not in normalized:
+        return ""
+    return normalized.split(":", 1)[0].strip()
 
 
 def _infer_capability_class(
@@ -670,7 +807,10 @@ def _normalize_snapshot_tool(item: dict[str, Any]) -> dict[str, Any]:
     qualified_skill_name = _normalize_optional_text(item.get("qualified_skill_name", ""))
     group_ids = _normalize_group_ids(item.get("group_ids", []))
     priority = _normalize_priority(item.get("priority"))
-    planner_visibility = _normalize_optional_text(item.get("planner_visibility", ""))
+    routing_visibility = _normalize_optional_text(
+        item.get("routing_visibility", ""),
+        item.get("planner_visibility", ""),
+    )
     aliases = _normalize_string_list(item.get("aliases", []))
     keywords = _normalize_string_list(item.get("keywords", []))
     use_when = _normalize_string_list(item.get("use_when", []))
@@ -693,8 +833,8 @@ def _normalize_snapshot_tool(item: dict[str, Any]) -> dict[str, Any]:
         normalized["group_ids"] = group_ids
     if priority is not None:
         normalized["priority"] = priority
-    if planner_visibility:
-        normalized["planner_visibility"] = planner_visibility
+    if routing_visibility:
+        normalized["routing_visibility"] = routing_visibility
     if aliases:
         normalized["aliases"] = aliases
     if keywords:

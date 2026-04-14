@@ -79,15 +79,15 @@ class ToolMetadata:
         description: Human-readable tool description.
         group: Tool group, such as `fs`, `runtime`, or `web`.
         requires_approval: Whether the tool requires explicit approval.
-        planner_visibility: Whether the tool should be visible in the first-pass
-            planner toolset for broad, non-follow-up requests.
+        routing_visibility: Whether the tool should be visible in the broad
+            capability surface for non-follow-up requests.
     """
 
     name: str
     description: str = ""
     group: str = ""
     requires_approval: bool = False
-    planner_visibility: str = "contextual"
+    routing_visibility: str = "contextual"
     aliases: list[str] = field(default_factory=list)
     keywords: list[str] = field(default_factory=list)
     use_when: list[str] = field(default_factory=list)

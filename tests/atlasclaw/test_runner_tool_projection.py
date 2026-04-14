@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from app.atlasclaw.agent.runner_tool.runner_tool_projection import (
+    compress_candidate_toolset,
     project_minimal_toolset,
-    project_planner_toolset,
     tool_required_turn_has_real_execution,
+    turn_action_requires_tool_execution,
 )
 from app.atlasclaw.agent.tool_gate_models import ToolIntentAction, ToolIntentPlan
 
@@ -43,7 +44,7 @@ def _allowed_tools() -> list[dict]:
             "description": "Search the web",
             "group_ids": ["group:web"],
             "capability_class": "web_search",
-            "planner_visibility": "general",
+            "routing_visibility": "general",
         },
         {
             "name": "list_provider_instances",
@@ -105,6 +106,32 @@ def test_project_minimal_toolset_supports_skill_and_explicit_tool_narrowing() ->
     assert trace["after_count"] == 3
 
 
+def test_project_minimal_toolset_supports_explicit_create_artifact_target() -> None:
+    plan = ToolIntentPlan(
+        action=ToolIntentAction.CREATE_ARTIFACT,
+        target_tool_names=["pptx_create_deck"],
+        target_capability_classes=["artifact:pptx"],
+    )
+
+    filtered, trace = project_minimal_toolset(
+        allowed_tools=[
+            *_allowed_tools(),
+            {
+                "name": "pptx_create_deck",
+                "description": "Create PPTX deck",
+                "group_ids": ["group:pptx"],
+                "capability_class": "artifact:pptx",
+                "result_mode": "tool_only_ok",
+            },
+        ],
+        intent_plan=plan,
+    )
+
+    assert [tool["name"] for tool in filtered] == ["pptx_create_deck"]
+    assert trace["enabled"] is True
+    assert trace["reason"] == "projection_applied"
+
+
 def test_project_minimal_toolset_does_not_widen_when_projection_is_empty() -> None:
     plan = ToolIntentPlan(
         action=ToolIntentAction.USE_TOOLS,
@@ -132,6 +159,39 @@ def test_tool_required_turn_requires_real_execution() -> None:
     )
 
     assert has_execution is False
+
+
+def test_tool_required_turn_requires_real_execution_for_explicit_create_artifact_target() -> None:
+    plan = ToolIntentPlan(
+        action=ToolIntentAction.CREATE_ARTIFACT,
+        target_tool_names=["pptx_create_deck"],
+        target_capability_classes=["artifact:pptx"],
+    )
+
+    has_execution = tool_required_turn_has_real_execution(
+        intent_plan=plan,
+        tool_call_summaries=[],
+        final_messages=[{"role": "assistant", "content": "我来帮你生成 PPT。"}],
+        start_index=0,
+    )
+
+    assert has_execution is False
+
+
+def test_turn_action_requires_tool_execution_for_explicit_create_artifact_target() -> None:
+    assert turn_action_requires_tool_execution(
+        ToolIntentPlan(
+            action=ToolIntentAction.CREATE_ARTIFACT,
+            target_tool_names=["pptx_create_deck"],
+            target_capability_classes=["artifact:pptx"],
+        )
+    )
+    assert turn_action_requires_tool_execution(
+        ToolIntentPlan(action=ToolIntentAction.USE_TOOLS, target_tool_names=["cmp_list_pending"])
+    )
+    assert not turn_action_requires_tool_execution(
+        ToolIntentPlan(action=ToolIntentAction.CREATE_ARTIFACT)
+    )
 
 
 def test_tool_required_turn_accepts_real_tool_execution_messages() -> None:
@@ -188,8 +248,8 @@ def test_tool_required_turn_accepts_executed_tool_names_without_tool_messages() 
     assert has_execution is True
 
 
-def test_project_planner_toolset_drops_provider_tools_for_new_non_follow_up_turn() -> None:
-    filtered, trace = project_planner_toolset(
+def test_compress_candidate_toolset_keeps_full_surface_without_metadata_subset() -> None:
+    filtered, trace = compress_candidate_toolset(
         allowed_tools=[
             *_allowed_tools(),
             {
@@ -197,7 +257,7 @@ def test_project_planner_toolset_drops_provider_tools_for_new_non_follow_up_turn
                 "description": "Get weather forecast",
                 "group_ids": ["group:web"],
                 "capability_class": "weather",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
         ],
         metadata_candidates={
@@ -209,17 +269,23 @@ def test_project_planner_toolset_drops_provider_tools_for_new_non_follow_up_turn
         },
         used_follow_up_context=False,
         min_metadata_confidence=0.3,
+        compression_threshold=2,
     )
 
     assert [tool["name"] for tool in filtered] == [
+        "cmp_list_pending",
+        "cmp_get_request_detail",
+        "jira_get_issue",
         "web_search",
+        "list_provider_instances",
+        "select_provider_instance",
         "openmeteo_weather",
     ]
-    assert trace["reason"] == "planner_general_tools_only"
+    assert trace["reason"] == "candidate_compression_not_required"
 
 
-def test_project_planner_toolset_keeps_metadata_matched_provider_subset() -> None:
-    filtered, trace = project_planner_toolset(
+def test_compress_candidate_toolset_keeps_metadata_matched_provider_subset() -> None:
+    filtered, trace = compress_candidate_toolset(
         allowed_tools=_allowed_tools(),
         metadata_candidates={
             "confidence": 0.92,
@@ -230,6 +296,7 @@ def test_project_planner_toolset_keeps_metadata_matched_provider_subset() -> Non
         },
         used_follow_up_context=False,
         min_metadata_confidence=0.3,
+        compression_threshold=2,
     )
 
     assert [tool["name"] for tool in filtered] == [
@@ -238,11 +305,11 @@ def test_project_planner_toolset_keeps_metadata_matched_provider_subset() -> Non
         "list_provider_instances",
         "select_provider_instance",
     ]
-    assert trace["reason"] == "planner_metadata_subset"
+    assert trace["reason"] == "candidate_compression_applied"
 
 
-def test_project_planner_toolset_prefers_single_tool_consensus_below_threshold() -> None:
-    filtered, trace = project_planner_toolset(
+def test_compress_candidate_toolset_prefers_single_tool_consensus_below_threshold() -> None:
+    filtered, trace = compress_candidate_toolset(
         allowed_tools=[
             *_allowed_tools(),
             {
@@ -250,7 +317,7 @@ def test_project_planner_toolset_prefers_single_tool_consensus_below_threshold()
                 "description": "Get weather forecast",
                 "group_ids": ["group:web"],
                 "capability_class": "weather",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
         ],
         metadata_candidates={
@@ -273,6 +340,7 @@ def test_project_planner_toolset_prefers_single_tool_consensus_below_threshold()
         },
         used_follow_up_context=False,
         min_metadata_confidence=0.3,
+        compression_threshold=2,
     )
 
     assert [tool["name"] for tool in filtered] == [
@@ -280,60 +348,60 @@ def test_project_planner_toolset_prefers_single_tool_consensus_below_threshold()
         "list_provider_instances",
         "select_provider_instance",
     ]
-    assert trace["reason"] == "planner_metadata_subset"
+    assert trace["reason"] == "candidate_compression_applied"
 
 
-def test_project_planner_toolset_hides_contextual_builtin_tools_for_public_turn() -> None:
-    filtered, trace = project_planner_toolset(
+def test_compress_candidate_toolset_keeps_full_surface_without_metadata_hint() -> None:
+    filtered, trace = compress_candidate_toolset(
         allowed_tools=[
             {
                 "name": "web_search",
                 "description": "Search the web",
                 "group_ids": ["group:web"],
                 "capability_class": "web_search",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
             {
                 "name": "web_fetch",
                 "description": "Fetch webpage content",
                 "group_ids": ["group:web"],
                 "capability_class": "web_fetch",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
             {
                 "name": "openmeteo_weather",
                 "description": "Get weather forecast",
                 "group_ids": ["group:web"],
                 "capability_class": "weather",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
             {
                 "name": "browser",
                 "description": "Browser automation",
                 "group_ids": ["group:ui"],
                 "capability_class": "browser",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
             {
                 "name": "exec",
                 "description": "Execute shell command",
                 "group_ids": ["group:runtime"],
                 "capability_class": "",
-                "planner_visibility": "contextual",
+                "routing_visibility": "contextual",
             },
             {
                 "name": "process",
                 "description": "Manage background process",
                 "group_ids": ["group:runtime"],
                 "capability_class": "",
-                "planner_visibility": "contextual",
+                "routing_visibility": "contextual",
             },
             {
                 "name": "read",
                 "description": "Read file content",
                 "group_ids": ["group:fs"],
                 "capability_class": "",
-                "planner_visibility": "contextual",
+                "routing_visibility": "contextual",
             },
         ],
         metadata_candidates={
@@ -345,6 +413,7 @@ def test_project_planner_toolset_hides_contextual_builtin_tools_for_public_turn(
         },
         used_follow_up_context=False,
         min_metadata_confidence=0.3,
+        compression_threshold=2,
     )
 
     assert [tool["name"] for tool in filtered] == [
@@ -352,12 +421,15 @@ def test_project_planner_toolset_hides_contextual_builtin_tools_for_public_turn(
         "web_fetch",
         "openmeteo_weather",
         "browser",
+        "exec",
+        "process",
+        "read",
     ]
-    assert trace["reason"] == "planner_general_tools_only"
+    assert trace["reason"] == "candidate_compression_not_required"
 
 
-def test_project_planner_toolset_treats_provider_type_none_string_as_non_provider() -> None:
-    filtered, trace = project_planner_toolset(
+def test_compress_candidate_toolset_treats_provider_type_none_string_as_non_provider() -> None:
+    filtered, trace = compress_candidate_toolset(
         allowed_tools=[
             {
                 "name": "web_search",
@@ -365,7 +437,7 @@ def test_project_planner_toolset_treats_provider_type_none_string_as_non_provide
                 "provider_type": "None",
                 "group_ids": ["group:web"],
                 "capability_class": "web_search",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
             {
                 "name": "openmeteo_weather",
@@ -373,7 +445,7 @@ def test_project_planner_toolset_treats_provider_type_none_string_as_non_provide
                 "provider_type": "None",
                 "group_ids": ["group:web"],
                 "capability_class": "weather",
-                "planner_visibility": "general",
+                "routing_visibility": "general",
             },
             {
                 "name": "smartcmp_list_pending",
@@ -381,7 +453,7 @@ def test_project_planner_toolset_treats_provider_type_none_string_as_non_provide
                 "provider_type": "smartcmp",
                 "group_ids": ["group:cmp"],
                 "capability_class": "provider:smartcmp",
-                "planner_visibility": "contextual",
+                "routing_visibility": "contextual",
             },
         ],
         metadata_candidates={
@@ -393,10 +465,36 @@ def test_project_planner_toolset_treats_provider_type_none_string_as_non_provide
         },
         used_follow_up_context=False,
         min_metadata_confidence=0.3,
+        compression_threshold=2,
     )
 
     assert [tool["name"] for tool in filtered] == [
         "web_search",
         "openmeteo_weather",
+        "smartcmp_list_pending",
     ]
-    assert trace["reason"] == "planner_general_tools_only"
+    assert trace["reason"] == "candidate_compression_not_required"
+
+
+def test_compress_candidate_toolset_applies_metadata_subset() -> None:
+    filtered, trace = compress_candidate_toolset(
+        allowed_tools=_allowed_tools(),
+        metadata_candidates={
+            "confidence": 0.92,
+            "preferred_provider_types": ["smartcmp"],
+            "preferred_group_ids": ["group:cmp"],
+            "preferred_capability_classes": ["provider:smartcmp"],
+            "preferred_tool_names": ["cmp_list_pending"],
+        },
+        used_follow_up_context=False,
+        min_metadata_confidence=0.3,
+        compression_threshold=1,
+    )
+
+    assert [tool["name"] for tool in filtered] == [
+        "cmp_list_pending",
+        "cmp_get_request_detail",
+        "list_provider_instances",
+        "select_provider_instance",
+    ]
+    assert trace["reason"] == "candidate_compression_applied"

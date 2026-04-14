@@ -19,7 +19,7 @@ class RunnerToolGatePolicyMixin:
         self,
         *,
         deps: SkillDeps,
-        intent_plan: ToolIntentPlan,
+        intent_plan: Optional[ToolIntentPlan],
         available_tools: list[dict[str, Any]],
     ) -> None:
         """Inject per-run turn guidance for prompt building."""
@@ -29,14 +29,37 @@ class RunnerToolGatePolicyMixin:
         retry_missing_tools = deps.extra.get("tool_execution_retry_missing_tools")
         if not isinstance(retry_missing_tools, list):
             retry_missing_tools = []
-        preferred_tools = self._preferred_tools_for_intent_plan(
-            intent_plan=intent_plan,
-            available_tools=available_tools,
+        if intent_plan is None:
+            preferred_tools = self._preferred_tools_from_available_tools(available_tools=available_tools)
+        else:
+            preferred_tools = self._preferred_tools_for_intent_plan(
+                intent_plan=intent_plan,
+                available_tools=available_tools,
+            )
+        policy_mode = "llm_first"
+        policy_reason = (
+            "The main model decides this turn after capability pruning and prompt construction."
         )
+        target_provider_types: list[str] = []
+        target_skill_names: list[str] = []
+        target_group_ids: list[str] = []
+        target_capability_classes: list[str] = []
+        if intent_plan is not None:
+            if intent_plan.action is ToolIntentAction.CREATE_ARTIFACT:
+                policy_mode = intent_plan.action.value
+            elif intent_plan.action is ToolIntentAction.USE_TOOLS:
+                policy_mode = intent_plan.action.value
+            elif intent_plan.action is ToolIntentAction.ASK_CLARIFICATION:
+                policy_mode = intent_plan.action.value
+            policy_reason = intent_plan.reason or policy_reason
+            target_provider_types = list(intent_plan.target_provider_types)
+            target_skill_names = list(intent_plan.target_skill_names)
+            target_group_ids = list(intent_plan.target_group_ids)
+            target_capability_classes = list(intent_plan.target_capability_classes)
         execution_hint = (
             "provider_tool_first"
             if (
-                intent_plan.action is ToolIntentAction.USE_TOOLS
+                intent_plan is not None
                 and bool(intent_plan.target_provider_types or intent_plan.target_skill_names)
             )
             else "default"
@@ -47,8 +70,8 @@ class RunnerToolGatePolicyMixin:
             if isinstance(candidate_goal, dict):
                 artifact_goal = dict(candidate_goal)
         deps.extra["tool_policy"] = {
-            "mode": intent_plan.action.value,
-            "reason": intent_plan.reason,
+            "mode": policy_mode,
+            "reason": policy_reason,
             "preferred_tools": preferred_tools,
             "execution_hint": execution_hint,
             "max_same_tool_calls_per_turn": int(
@@ -58,12 +81,39 @@ class RunnerToolGatePolicyMixin:
             "retry_missing_tools": [
                 str(name).strip() for name in retry_missing_tools if str(name).strip()
             ],
-            "target_provider_types": list(intent_plan.target_provider_types),
-            "target_skill_names": list(intent_plan.target_skill_names),
-            "target_group_ids": list(intent_plan.target_group_ids),
-            "target_capability_classes": list(intent_plan.target_capability_classes),
+            "target_provider_types": target_provider_types,
+            "target_skill_names": target_skill_names,
+            "target_group_ids": target_group_ids,
+            "target_capability_classes": target_capability_classes,
             "artifact_goal": artifact_goal,
         }
+
+    @staticmethod
+    def _preferred_tools_from_available_tools(
+        *,
+        available_tools: list[dict[str, Any]],
+    ) -> list[str]:
+        ranked: list[tuple[int, str]] = []
+        for tool in available_tools:
+            if not isinstance(tool, dict):
+                continue
+            name = str(tool.get("name", "") or "").strip()
+            if not name:
+                continue
+            try:
+                priority = int(tool.get("priority", 100) or 100)
+            except (TypeError, ValueError):
+                priority = 100
+            ranked.append((priority, name))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        result: list[str] = []
+        for _, name in ranked:
+            if name in result:
+                continue
+            result.append(name)
+            if len(result) >= 8:
+                break
+        return result
 
     @staticmethod
     def _preferred_tools_for_intent_plan(
