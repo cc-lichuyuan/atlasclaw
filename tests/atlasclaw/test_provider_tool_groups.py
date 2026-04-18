@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Copyright 2021  Qianyun, Inc. All rights reserved.
+
 """Provider tool metadata and group snapshot tests."""
 
 from __future__ import annotations
@@ -100,6 +102,60 @@ def test_build_scoped_deps_exposes_tool_group_snapshot(tmp_path) -> None:
     assert set(groups["group:cmp"]) == {"cmp_get_ticket", "cmp_list_pending"}
     assert deps.extra.get("thread_id") == "thread-42"
     assert deps.extra.get("trace_id") == "thread-42"
+
+
+def test_build_scoped_deps_merges_user_provider_instances_over_template_config(tmp_path, monkeypatch) -> None:
+    registry = SkillRegistry()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    session_manager = SessionManager(str(workspace))
+    session_queue = SessionQueue()
+    ctx = APIContext(
+        session_manager=session_manager,
+        session_queue=session_queue,
+        skill_registry=registry,
+        available_providers={"github": ["default"]},
+        provider_instances={
+            "github": {
+                "default": {
+                    "base_url": "https://api.github.com",
+                    "auth_type": "user_token",
+                }
+            }
+        },
+    )
+
+    user = UserInfo(
+        user_id="u1",
+        display_name="Admin",
+        raw_token="token",
+        roles=["admin"],
+    )
+
+    monkeypatch.setattr(
+        "app.atlasclaw.api.deps_context.build_user_provider_instances",
+        lambda user_id, workspace_path=None: {
+            "github": {
+                "default": {
+                    "provider_type": "github",
+                    "instance_name": "default",
+                    "base_url": "https://api.github.com",
+                    "auth_type": "user_token",
+                    "user_token": "github_pat_user_123",
+                }
+            }
+        },
+    )
+
+    deps = build_scoped_deps(ctx, user, "agent:main:user:u1:web:dm:peer-1:topic:thread-42")
+
+    github_default = deps.extra["provider_instances"]["github"]["default"]
+    assert github_default["user_token"] == "github_pat_user_123"
+    assert github_default["base_url"] == "https://api.github.com"
+    assert deps.extra["available_providers"]["github"] == ["default"]
+
+    registry_adapter = deps.extra["_service_provider_registry"]
+    assert registry_adapter.get_instance_config("github", "default")["user_token"] == "github_pat_user_123"
 
 
 def test_register_builtin_tools_exposes_explicit_runtime_metadata() -> None:

@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Copyright 2021  Qianyun, Inc. All rights reserved.
+
 """YAML frontmatter parsing for markdown skills."""
 
 from __future__ import annotations

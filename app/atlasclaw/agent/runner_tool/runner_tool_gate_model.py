@@ -1,3 +1,6 @@
+# Copyright 2021  Qianyun, Inc. All rights reserved.
+
+
 from __future__ import annotations
 
 import asyncio
@@ -1646,4 +1649,3 @@ class RunnerToolGateModelMixin:
                 return {}
             return parsed if isinstance(parsed, dict) else {}
         return {}
-

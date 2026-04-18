@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+# Copyright 2021  Qianyun, Inc. All rights reserved.
+
 
 from __future__ import annotations
 
@@ -13,6 +15,10 @@ from ..auth.models import UserInfo
 from ..core.deps import SkillDeps
 from ..core.security_guard import ensure_user_work_dir
 from ..core.trace import enrich_trace_metadata
+from ..core.user_provider_bindings import (
+    ResolvedProviderInstanceRegistry,
+    build_user_provider_instances,
+)
 from ..memory.manager import MemoryManager
 from ..session.manager import SessionManager
 from ..session.queue import SessionQueue
@@ -157,36 +163,31 @@ def build_scoped_deps(
     else:
         tool_groups_snapshot = {}
 
-    # Merge global provider_instances with user-scoped provider configs
-    merged_provider_instances = dict(ctx.provider_instances or {})
-    try:
-        from ..core.user_provider_bindings import build_user_provider_instances
-        workspace_path = str(scoped_session_mgr.workspace_path)
-        user_provider_instances = build_user_provider_instances(
-            user_info.user_id,
-            workspace_path,
-        )
-        if user_provider_instances:
-            for provider_type, instances in user_provider_instances.items():
-                if provider_type not in merged_provider_instances:
-                    merged_provider_instances[provider_type] = instances
-                else:
-                    for instance_name, instance_config in instances.items():
-                        global_instance = merged_provider_instances[provider_type].get(instance_name, {})
-                        merged_instance = {**global_instance, **instance_config}
-                        merged_provider_instances[provider_type][instance_name] = merged_instance
-    except Exception:
-        pass
+    merged_provider_instances = {
+        provider_type: {
+            instance_name: dict(instance_config)
+            for instance_name, instance_config in instances.items()
+        }
+        for provider_type, instances in (ctx.provider_instances or {}).items()
+        if isinstance(instances, dict)
+    }
+    user_provider_instances = build_user_provider_instances(
+        user_info.user_id,
+        workspace_path=str(scoped_session_mgr.workspace_path),
+    )
+    for provider_type, instances in user_provider_instances.items():
+        provider_bucket = merged_provider_instances.setdefault(provider_type, {})
+        for instance_name, instance_config in instances.items():
+            provider_bucket[instance_name] = dict(instance_config)
 
-    # Use merged_provider_instances as provider_config if caller provided global config
-    # This ensures user-scoped tokens (e.g. user_token) are available to skill scripts
-    effective_provider_config = merged_provider_instances if merged_provider_instances else (provider_config or {})
+    provider_registry = ResolvedProviderInstanceRegistry(merged_provider_instances)
+    available_providers = provider_registry.get_available_providers_summary()
 
     deps_extra = {
-        "_service_provider_registry": ctx.service_provider_registry,
-        "available_providers": ctx.available_providers,
+        "_service_provider_registry": provider_registry,
+        "available_providers": available_providers,
         "provider_instances": merged_provider_instances,
-        "provider_config": effective_provider_config,
+        "provider_config": provider_config or {},
         "tools_snapshot": tools_snapshot,
         "tools_snapshot_authoritative": False,
         "tool_groups_snapshot": tool_groups_snapshot,

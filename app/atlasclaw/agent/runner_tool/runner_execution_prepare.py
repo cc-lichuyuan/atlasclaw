@@ -1,3 +1,6 @@
+# Copyright 2021  Qianyun, Inc. All rights reserved.
+
+
 from __future__ import annotations
 
 import asyncio
@@ -1545,4 +1548,3 @@ class RunnerExecutionPreparePhaseMixin:
         if not session_message_history:
             return []
         return list(session_message_history)
-
