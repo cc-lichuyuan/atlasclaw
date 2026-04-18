@@ -1,19 +1,12 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Optional
 
 from app.atlasclaw.agent.tool_gate import CapabilityMatcher
 from app.atlasclaw.agent.tool_gate_models import CapabilityMatchResult, ToolGateDecision, ToolPolicyMode
 from app.atlasclaw.core.deps import SkillDeps
-
-
-_CJK_YES = "\u662f"
-_CJK_NO = "\u5426"
-_FULLWIDTH_COMMA = "\uFF0C"
-_FULLWIDTH_SEMICOLON = "\uFF1B"
-_FULLWIDTH_QUESTION_MARK = "\uFF1F"
-_FULLWIDTH_COLON = "\uFF1A"
 
 class RunnerToolGateRoutingMixin:
     @staticmethod
@@ -70,11 +63,12 @@ class RunnerToolGateRoutingMixin:
             return current
         if not current:
             return previous
+        normalized_current = unicodedata.normalize("NFKC", current)
         inline_selection_pattern = re.compile(
-            rf"^(?:\d+|[yn]|yes|no|true|false|{_CJK_YES}|{_CJK_NO})$",
+            r"^(?:\d+|[yn]|yes|no|true|false)$",
             re.IGNORECASE,
         )
-        separator = " " if inline_selection_pattern.fullmatch(current) else "\n"
+        separator = " " if inline_selection_pattern.fullmatch(normalized_current) else "\n"
         return f"{previous}{separator}{current}".strip()
 
     def _align_external_system_intent(
@@ -419,9 +413,10 @@ class RunnerToolGateRoutingMixin:
         normalized = " ".join((text or "").split()).strip()
         if not normalized:
             return False
+        normalized = unicodedata.normalize("NFKC", normalized)
         parts = [
             item.strip()
-            for item in re.split(rf"\s*[,{_FULLWIDTH_COMMA};{_FULLWIDTH_SEMICOLON}|]\s*", normalized)
+            for item in re.split(r"\s*[,;|]\s*", normalized)
             if item.strip()
         ]
         if len(parts) < 2:
@@ -672,11 +667,14 @@ class RunnerToolGateRoutingMixin:
         text = " ".join((message or "").split())
         if not text:
             return False
-        lowered = text.lower()
-        question_count = text.count("?") + text.count(_FULLWIDTH_QUESTION_MARK)
-        numbered_choices = len(re.findall(r"(?:^|[\s\n])(?:1[\)\.]|2[\)\.]|3[\)\.])", text))
+        normalized_text = unicodedata.normalize("NFKC", text)
+        lowered = normalized_text.lower()
+        question_count = normalized_text.count("?")
+        numbered_choices = len(
+            re.findall(r"(?:^|[\s\n])(?:\[\d+\]|\d[\)\.])", normalized_text)
+        )
         enumerated_field_lines = len(
-            re.findall(rf"(?m)^\s*\d+[\.\)]\s+.+?(?:[:{_FULLWIDTH_COLON}]\s*)$", text)
+            re.findall(r"(?m)^\s*(?:\[\d+\]|\d[\.\)])\s+.+?(?::\s*)?$", normalized_text)
         )
         interaction_markers = (
             "please reply",
@@ -688,30 +686,23 @@ class RunnerToolGateRoutingMixin:
             "select",
             "tell me",
             "provide",
-            "\u8bf7\u56de\u590d",
-            "\u56de\u590d\u6211",
-            "\u8bf7\u786e\u8ba4",
-            "\u786e\u8ba4\u4e00\u4e0b",
-            "\u8865\u5145",
-            "\u544a\u8bc9\u6211",
-            "\u9009\u62e9",
-            "\u6307\u5b9a",
-            "\u9009\u9879",
-            "\u4efb\u9009",
         )
         selection_prompt_markers = (
             "enter number",
             "input number",
-            "\u8f93\u5165\u7f16\u53f7",
-            "\u8bf7\u8f93\u5165\u7f16\u53f7",
-            "\u7f16\u53f7",
+            "choose a number",
+            "select a number",
         )
-        marker_hits = sum(1 for marker in interaction_markers if marker in lowered or marker in text)
+        marker_hits = sum(1 for marker in interaction_markers if marker in lowered)
+        has_selection_prompt = any(marker in lowered for marker in selection_prompt_markers)
+        has_prompt_suffix = bool(re.search(r"[:?]\s*$", normalized_text))
         if numbered_choices >= 2 and enumerated_field_lines >= 2:
             return True
         if numbered_choices >= 2 and marker_hits >= 1:
             return True
-        if marker_hits >= 1 and any(marker in lowered or marker in text for marker in selection_prompt_markers):
+        if numbered_choices >= 2 and has_prompt_suffix:
+            return True
+        if marker_hits >= 1 and has_selection_prompt:
             return True
         if question_count >= 2 and marker_hits >= 1:
             return True

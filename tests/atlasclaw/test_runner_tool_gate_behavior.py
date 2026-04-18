@@ -586,6 +586,28 @@ def test_resolve_contextual_tool_request_recognizes_enumerated_field_prompt_with
     assert used_follow_up_context is True
 
 
+def test_resolve_contextual_tool_request_recognizes_bracketed_selection_prompt() -> None:
+    runner = _GateRunner()
+
+    resolved, used_follow_up_context = runner._resolve_contextual_tool_request(
+        user_message="2",
+        recent_history=[
+            {"role": "user", "content": "申请2c4g云资源"},
+            {
+                "role": "assistant",
+                "content": (
+                    "[1] team1\n"
+                    "[2] 我的业务组\n"
+                    "请选择业务组（输入编号）："
+                ),
+            },
+        ],
+    )
+
+    assert resolved == "申请2c4g云资源 2"
+    assert used_follow_up_context is True
+
+
 def test_build_recent_follow_up_tool_intent_plan_reuses_single_recent_tool() -> None:
     plan = build_recent_follow_up_tool_intent_plan(
         recent_history=[
