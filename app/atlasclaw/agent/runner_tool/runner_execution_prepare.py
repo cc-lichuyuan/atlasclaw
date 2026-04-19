@@ -401,6 +401,102 @@ def enrich_target_md_skill_with_workflow_context(
     return enriched
 
 
+def _recover_skill_affinity_from_transcript(
+    *,
+    message_history: list[dict[str, Any]],
+    all_available_tools: list[dict[str, Any]],
+    max_lookback: int = 12,
+) -> Optional[ToolIntentPlan]:
+    """Recover skill affinity from recent transcript tool calls.
+
+    When the metadata recall fails to produce a capability match but the
+    recent conversation contains tool calls from a known md_skill, construct
+    a plan that preserves that skill's context for the current turn.
+
+    This is entirely data-driven: it inspects the actual tool messages in
+    the transcript and maps tool names to registered md_skills via the full
+    toolset index. No skill names or tool names are hardcoded.
+    """
+    if not isinstance(message_history, list) or not message_history:
+        return None
+    if not isinstance(all_available_tools, list) or not all_available_tools:
+        return None
+
+    # Build tool-name → skill metadata lookup from the full registered toolset.
+    tool_skill_index: dict[str, dict[str, Any]] = {}
+    for tool in all_available_tools:
+        if not isinstance(tool, dict):
+            continue
+        name = str(tool.get("name", "") or "").strip()
+        qualified_skill = str(
+            tool.get("qualified_skill_name", "") or tool.get("skill_name", "") or ""
+        ).strip()
+        if not name or not qualified_skill:
+            continue
+        provider_type = str(tool.get("provider_type", "") or "").strip()
+        capability_class = str(tool.get("capability_class", "") or "").strip()
+        group_ids = [
+            str(g).strip()
+            for g in (tool.get("group_ids", []) or [])
+            if str(g).strip()
+        ]
+        tool_skill_index[name] = {
+            "qualified_skill_name": qualified_skill,
+            "provider_type": provider_type,
+            "capability_class": capability_class,
+            "group_ids": group_ids,
+        }
+
+    if not tool_skill_index:
+        return None
+
+    # Scan recent history backward for tool-role messages.
+    lookback_slice = message_history[-max_lookback:] if len(message_history) > max_lookback else message_history
+    skill_meta: dict[str, dict[str, Any]] = {}
+    first_skill_found: Optional[str] = None
+
+    for message in reversed(lookback_slice):
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role", "") or "").strip().lower()
+        if role != "tool":
+            continue
+        tool_name = str(
+            message.get("tool_name", "") or message.get("name", "") or ""
+        ).strip()
+        if not tool_name or tool_name not in tool_skill_index:
+            continue
+        meta = tool_skill_index[tool_name]
+        qname = meta["qualified_skill_name"]
+        if first_skill_found is None:
+            first_skill_found = qname
+        if qname not in skill_meta:
+            skill_meta[qname] = meta
+
+    if first_skill_found is None:
+        return None
+
+    # Use the most recently encountered skill.
+    primary_meta = skill_meta[first_skill_found]
+
+    # Collect all registered tools belonging to this skill.
+    skill_tool_names = [
+        name for name, meta in tool_skill_index.items()
+        if meta["qualified_skill_name"] == first_skill_found
+    ]
+
+    return ToolIntentPlan(
+        action=ToolIntentAction.DIRECT_ANSWER,
+        target_provider_types=[primary_meta["provider_type"]] if primary_meta["provider_type"] else [],
+        target_skill_names=[first_skill_found],
+        target_group_ids=list(primary_meta.get("group_ids", [])),
+        target_capability_classes=[primary_meta["capability_class"]] if primary_meta["capability_class"] else [],
+        target_tool_names=skill_tool_names,
+        reason="Skill affinity recovered from recent transcript tool calls. "
+               "The LLM decides the next action freely.",
+    )
+
+
 def _parse_target_md_skill_workflow_metadata(value: Any) -> Any:
     """Normalize runtime-only metadata into a compact prompt-safe structure."""
     if value is None:
@@ -1030,6 +1126,29 @@ class RunnerExecutionPreparePhaseMixin:
                     "follow_up_request_context_restored_without_capability_match",
                     reason="request_restored_but_no_capability_match",
                 )
+            # --- Skill affinity recovery from transcript ---
+            # When metadata recall fails to produce a capability match,
+            # check whether the recent conversation contains tool calls
+            # from a known md_skill.  If so, recover that skill's context
+            # so the LLM can continue the workflow instead of losing all
+            # tool visibility.
+            if tool_intent_plan is None and not explicit_capability_match:
+                recovered_plan = _recover_skill_affinity_from_transcript(
+                    message_history=message_history,
+                    all_available_tools=all_available_tools,
+                )
+                if recovered_plan is not None:
+                    tool_intent_plan = recovered_plan
+                    explicit_capability_match = True
+                    _log_step(
+                        "skill_affinity_recovered_from_transcript",
+                        recovered_skill=(
+                            recovered_plan.target_skill_names[0]
+                            if recovered_plan.target_skill_names
+                            else ""
+                        ),
+                        recovered_tool_count=len(recovered_plan.target_tool_names),
+                    )
             if tool_intent_plan is None and not explicit_capability_match:
                 available_tools = []
                 _log_step(
