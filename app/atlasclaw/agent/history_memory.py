@@ -388,28 +388,17 @@ class HistoryMemoryCoordinator:
 
     @staticmethod
     def _normalize_tool_content_for_model(*, tool_name: str, content: Any) -> Any:
-        """Wrap provider tool payloads so the model treats internal metadata as hidden state."""
+        """Drop runtime-only metadata before replaying tool content to the model."""
         del tool_name
         if not isinstance(content, dict):
             return content
 
-        output_text = str(content.get("output", "") or "").strip()
-        internal_text = str(content.get("_internal", "") or "").strip()
-
-        if not internal_text:
+        if "_internal" not in content:
             return content
 
-        lines: list[str] = []
-        if output_text:
-            lines.append(output_text)
-        lines.extend(
-            [
-                "The metadata below is reserved for workflow continuation only.",
-                "Do not expose raw internal metadata to the user.",
-                f"WORKFLOW_METADATA_FOR_TOOL_USE_ONLY: {internal_text}",
-            ]
-        )
-        return "\n".join(lines)
+        normalized = dict(content)
+        normalized.pop("_internal", None)
+        return normalized
 
     def _infer_tool_message_identity(
         self,

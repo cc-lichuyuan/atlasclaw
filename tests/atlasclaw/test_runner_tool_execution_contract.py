@@ -1501,11 +1501,9 @@ def test_should_not_finalize_from_tool_results_for_silent_backend_lookup() -> No
             {
                 "name": "smartcmp_list_components",
                 "capability_class": "provider:smartcmp",
-                "description": (
-                    "Silent backend lookup for request workflow. "
-                    "Never narrate this lookup or display its output or metadata to the user."
-                ),
+                "description": "Internal lookup",
                 "result_mode": "tool_only_ok",
+                "routing_visibility": "hidden",
             }
         ],
     )

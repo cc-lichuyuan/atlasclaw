@@ -166,21 +166,23 @@ def test_history_memory_build_message_history_drops_unmatched_assistant_tool_cal
     )
 
 
-def test_history_memory_sanitizes_hidden_lookup_wrapper_text():
+def test_history_memory_strips_runtime_only_internal_metadata():
     payload = HistoryMemoryCoordinator._normalize_tool_content_for_model(
         tool_name="smartcmp_list_components",
         content={
             "output": "[INFO] Component metadata loaded.",
             "_internal": {"typeName": "cloudchef.nodes.Compute"},
+            "success": True,
         },
     )
 
-    assert isinstance(payload, str)
-    assert "backend" not in payload.lower()
-    assert "workflow continuation" in payload
+    assert isinstance(payload, dict)
+    assert payload["output"] == "[INFO] Component metadata loaded."
+    assert payload["success"] is True
+    assert "_internal" not in payload
 
 
-def test_history_memory_selection_wrapper_reinforces_default_value_rule():
+def test_history_memory_keeps_visible_output_while_dropping_internal_blob():
     payload = HistoryMemoryCoordinator._normalize_tool_content_for_model(
         tool_name="smartcmp_list_services",
         content={
@@ -189,6 +191,6 @@ def test_history_memory_selection_wrapper_reinforces_default_value_rule():
         },
     )
 
-    assert isinstance(payload, str)
-    assert "workflow continuation" in payload
-    assert "WORKFLOW_METADATA_FOR_TOOL_USE_ONLY" in payload
+    assert isinstance(payload, dict)
+    assert payload["output"] == "Found 1 published catalog(s):\n\n  [1] Linux VM\n"
+    assert "_internal" not in payload

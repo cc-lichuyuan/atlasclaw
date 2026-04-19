@@ -207,36 +207,6 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _dedupe_non_empty_text(values: list[Any]) -> list[str]:
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        normalized = str(value or "").strip()
-        if not normalized or normalized in seen:
-            continue
-        seen.add(normalized)
-        deduped.append(normalized)
-    return deduped
-
-
-def recent_history_has_tool_activity(
-    *,
-    recent_history: list[dict[str, Any]],
-    window: int = 6,
-) -> bool:
-    """Return whether the most recent transcript window shows active tool workflow state."""
-    safe_window = max(1, int(window or 0))
-    for message in (recent_history or [])[-safe_window:]:
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get("role", "") or "").strip().lower()
-        if role in {"tool", "toolresult", "tool_result"}:
-            return True
-        if message.get("tool_calls") or message.get("tool_results"):
-            return True
-    return False
-
-
 def _artifact_classes_for_entry(entry: dict[str, Any]) -> set[str]:
     return {
         f"artifact:{str(item).strip().lower()}"
@@ -469,109 +439,6 @@ def build_retry_tool_intent_plan(
     )
 
 
-def build_recent_follow_up_tool_intent_plan(
-    *,
-    recent_history: list[dict[str, Any]],
-    available_tools: list[dict[str, Any]],
-) -> ToolIntentPlan | None:
-    """Reuse the recent workflow scope for low-information or structured follow-up turns."""
-    available_by_name = {
-        str(tool.get("name", "") or "").strip(): dict(tool)
-        for tool in (available_tools or [])
-        if isinstance(tool, dict) and str(tool.get("name", "") or "").strip()
-    }
-    if not available_by_name:
-        return None
-
-    recent_tool_names: list[str] = []
-    seen: set[str] = set()
-
-    for message in reversed(recent_history or []):
-        if not isinstance(message, dict):
-            continue
-        role = str(message.get("role", "") or "").strip().lower()
-        candidate_names: list[str] = []
-        if role == "assistant":
-            for tool_call in reversed(message.get("tool_calls", []) or []):
-                if not isinstance(tool_call, dict):
-                    continue
-                tool_name = str(
-                    tool_call.get("name", tool_call.get("tool_name", "")) or ""
-                ).strip()
-                if tool_name:
-                    candidate_names.append(tool_name)
-        if role in {"tool", "toolresult", "tool_result"}:
-            tool_name = str(message.get("tool_name", "") or message.get("name", "")).strip()
-            if tool_name:
-                candidate_names.append(tool_name)
-        tool_results = message.get("tool_results")
-        if isinstance(tool_results, list):
-            for result in reversed(tool_results):
-                if not isinstance(result, dict):
-                    continue
-                tool_name = str(result.get("tool_name", "") or result.get("name", "")).strip()
-                if tool_name:
-                    candidate_names.append(tool_name)
-        for tool_name in candidate_names:
-            if tool_name not in available_by_name or tool_name in seen:
-                continue
-            seen.add(tool_name)
-            recent_tool_names.append(tool_name)
-            if len(recent_tool_names) >= 6:
-                break
-        if len(recent_tool_names) >= 6:
-            break
-
-    if not recent_tool_names:
-        return None
-
-    matched_tools = [available_by_name[name] for name in recent_tool_names]
-    target_skill_names = _dedupe_non_empty_text(
-        [
-            tool.get("qualified_skill_name", "") or tool.get("skill_name", "")
-            for tool in matched_tools
-        ]
-    )
-    target_provider_types = _dedupe_non_empty_text(
-        [tool.get("provider_type", "") for tool in matched_tools]
-    )
-    target_group_ids = _dedupe_non_empty_text(
-        [
-            group_id
-            for tool in matched_tools
-            for group_id in (tool.get("group_ids", []) or [])
-        ]
-    )
-    target_capability_classes = _dedupe_non_empty_text(
-        [tool.get("capability_class", "") for tool in matched_tools]
-    )
-    target_tool_names = _dedupe_non_empty_text(recent_tool_names)
-
-    if len(target_skill_names) > 1:
-        return None
-    if not target_skill_names and len(target_provider_types) > 1:
-        return None
-    if (
-        not target_skill_names
-        and not target_provider_types
-        and len(target_capability_classes) > 1
-    ):
-        return None
-
-    return ToolIntentPlan(
-        action=ToolIntentAction.USE_TOOLS,
-        target_provider_types=target_provider_types,
-        target_skill_names=target_skill_names,
-        target_group_ids=target_group_ids,
-        target_capability_classes=target_capability_classes,
-        target_tool_names=target_tool_names,
-        reason=(
-            "Follow-up context reused the recent workflow scope from the current thread so the "
-            "main model can continue the same evidence-driven workflow."
-        ),
-    )
-
-
 def prune_auto_selected_provider_instance_tools(
     *,
     available_tools: list[dict[str, Any]],
@@ -646,9 +513,18 @@ def prune_auto_selected_provider_instance_tools(
     for tool in available_tools:
         if not isinstance(tool, dict):
             continue
+        normalized_group_ids = {
+            str(group_id or "").strip().lower()
+            for group_id in (tool.get("group_ids", []) or [])
+            if str(group_id or "").strip()
+        }
+        capability_class = str(tool.get("capability_class", "") or "").strip().lower()
+        is_provider_selector = bool(tool.get("coordination_only")) and (
+            "group:providers" in normalized_group_ids or capability_class == "provider:generic"
+        )
         tool_name = str(tool.get("name", "") or "").strip()
-        if tool_name in {"select_provider_instance", "list_provider_instances"}:
-            removed_tools.append(tool_name)
+        if is_provider_selector:
+            removed_tools.append(tool_name or "<unnamed>")
             continue
         filtered_tools.append(dict(tool))
 
@@ -1021,9 +897,6 @@ class RunnerExecutionPreparePhaseMixin:
                 reason=str(candidate_compression_trace.get("reason", "") or ""),
                 coordination_tools=list(candidate_compression_trace.get("coordination_tools", []) or []),
             )
-            has_recent_tool_activity = recent_history_has_tool_activity(
-                recent_history=message_history,
-            )
             explicit_capability_match = self._metadata_plan_represents_explicit_capability_match(
                 metadata_candidates=metadata_candidates,
                 metadata_plan=metadata_tool_intent_plan,
@@ -1034,28 +907,6 @@ class RunnerExecutionPreparePhaseMixin:
                 metadata_plan=metadata_tool_intent_plan,
                 explicit_capability_match=explicit_capability_match,
             )
-            if tool_intent_plan is None and (used_follow_up_context or has_recent_tool_activity):
-                follow_up_tool_intent_plan = build_recent_follow_up_tool_intent_plan(
-                    recent_history=message_history,
-                    available_tools=available_tools,
-                )
-                if follow_up_tool_intent_plan is not None:
-                    tool_intent_plan = build_llm_first_guidance_plan(
-                        user_message=tool_request_message,
-                        metadata_plan=follow_up_tool_intent_plan,
-                        explicit_capability_match=True,
-                    )
-                    _log_step(
-                        "follow_up_tool_context_reused",
-                        action=follow_up_tool_intent_plan.action.value,
-                        target_provider_types=list(
-                            follow_up_tool_intent_plan.target_provider_types
-                        ),
-                        target_capability_classes=list(
-                                follow_up_tool_intent_plan.target_capability_classes
-                            ),
-                            target_tool_names=list(follow_up_tool_intent_plan.target_tool_names),
-                        )
             artifact_goal = resolve_artifact_goal_from_intent_plan(metadata_tool_intent_plan)
             if isinstance(deps.extra, dict):
                 if artifact_goal is not None:
@@ -1100,28 +951,20 @@ class RunnerExecutionPreparePhaseMixin:
                 if tool_intent_plan is not None
                 else [],
             )
-            # Detect active multi-step workflows from recent history.
-            # If the conversation has recent tool activity, keep tools
-            # available so the model can continue the same workflow.
             if (
                 tool_intent_plan is None
                 and not explicit_capability_match
-                and not used_follow_up_context
-                and not has_recent_tool_activity
+                and used_follow_up_context
             ):
+                _log_step(
+                    "follow_up_request_context_restored_without_capability_match",
+                    reason="request_restored_but_no_capability_match",
+                )
+            if tool_intent_plan is None and not explicit_capability_match:
                 available_tools = []
                 _log_step(
                     "direct_answer_tools_hidden",
                     reason="no_strong_capability_match",
-                )
-            elif (
-                tool_intent_plan is None
-                and not explicit_capability_match
-                and (has_recent_tool_activity or used_follow_up_context)
-            ):
-                _log_step(
-                    "workflow_tools_retained",
-                    reason="recent_tool_activity_or_follow_up_detected",
                 )
 
             if tool_intent_plan is not None:

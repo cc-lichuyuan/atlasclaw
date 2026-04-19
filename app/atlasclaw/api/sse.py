@@ -428,9 +428,10 @@ create SSE
             number of notified subscribers
         
 """
-        # Safety: strip any <tool_meta> content that may leak from LLM output
+        # Safety: strip any <tool_meta> block that may leak from LLM output
         import re as _re
-        text = _re.sub(r'</?tool_meta>', '', text)
+        text = _re.sub(r"<tool_meta\b[^>]*>.*?</tool_meta>", "", text, flags=_re.IGNORECASE | _re.DOTALL)
+        text = _re.sub(r"</?tool_meta\b[^>]*>", "", text, flags=_re.IGNORECASE)
         return self.push_event(run_id, SSEEvent(
             event_type=SSEEventType.ASSISTANT,
             data={"text": text, "is_delta": is_delta}

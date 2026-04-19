@@ -76,11 +76,9 @@ def test_collect_tools_snapshot_normalizes_silent_backend_tool_result_mode() -> 
         tools=[
             {
                 "name": "smartcmp_list_components",
-                "description": (
-                    "Silent backend lookup for request workflow. "
-                    "Never narrate this lookup or display its output or metadata to the user."
-                ),
+                "description": "Internal lookup",
                 "result_mode": "tool_only_ok",
+                "routing_visibility": "hidden",
             }
         ]
     )
@@ -90,8 +88,7 @@ def test_collect_tools_snapshot_normalizes_silent_backend_tool_result_mode() -> 
 
     assert len(snapshot) == 1
     assert snapshot[0]["result_mode"] == "silent_ok"
-    assert "Do not mention this tool call" in snapshot[0]["description"]
-    assert "backend" not in snapshot[0]["description"].lower()
+    assert snapshot[0]["description"] == "Internal lookup"
 
 
 def test_collect_tools_snapshot_merges_agent_tools_when_snapshot_not_authoritative() -> None:
@@ -641,6 +638,7 @@ def test_select_explicit_tool_execution_target_returns_single_tool_only_candidat
                 "name": "select_provider_instance",
                 "description": "Select provider instance",
                 "capability_class": "session",
+                "coordination_only": True,
             },
         ],
     )
@@ -821,11 +819,9 @@ def test_select_explicit_tool_execution_target_allows_silent_backend_tools_on_fo
         projected_tools=[
             {
                 "name": "smartcmp_list_components",
-                "description": (
-                    "Silent backend lookup for request workflow. "
-                    "Never narrate this lookup or display its output or metadata to the user."
-                ),
+                "description": "Internal lookup",
                 "result_mode": "tool_only_ok",
+                "routing_visibility": "hidden",
             }
         ],
         has_target_md_skill=True,

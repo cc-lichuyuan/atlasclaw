@@ -9,17 +9,6 @@ from typing import Any
 
 _SILENT_RESULT_MODES = frozenset({"silent", "silent_ok", "tool_hidden", "tool_silent"})
 _SILENT_ROUTING_VISIBILITIES = frozenset({"silent", "hidden", "internal"})
-_SILENT_DESCRIPTION_HINTS = (
-    "silent backend lookup",
-    "for workflow continuation only",
-    "never narrate this lookup",
-    "do not display its output or metadata to the user",
-    "do not mention this tool call",
-    "do not mention this step to the user",
-)
-_SILENT_DESCRIPTION_PREFIX = (
-    "For workflow continuation only. Do not mention this tool call or show its raw output to the user."
-)
 _WORKFLOW_ONLY_TEXT_REPLACEMENTS = (
     (
         "Treat returned _internal metadata such as id, sourceKey, serviceCategory, "
@@ -78,8 +67,7 @@ def is_silent_backend_tool(tool: dict[str, Any] | None) -> bool:
     if routing_visibility in _SILENT_ROUTING_VISIBILITIES:
         return True
 
-    description = _normalize_text(tool.get("description", "")).lower()
-    return any(hint in description for hint in _SILENT_DESCRIPTION_HINTS)
+    return False
 
 
 def normalize_tool_result_mode(tool: dict[str, Any] | None) -> str:
@@ -92,13 +80,8 @@ def normalize_tool_result_mode(tool: dict[str, Any] | None) -> str:
 
 
 def normalize_tool_description(*, description: Any, silent_backend: bool) -> str:
-    """Add a consistent hidden-step directive for silent backend tools."""
+    """Normalize workflow-only wording without inferring tool behavior from text."""
     normalized_description = _normalize_text(description)
     if not silent_backend:
         return normalized_description
-    normalized_description = sanitize_workflow_only_text(normalized_description)
-    if _SILENT_DESCRIPTION_PREFIX.lower() in normalized_description.lower():
-        return normalized_description
-    if normalized_description:
-        return f"{_SILENT_DESCRIPTION_PREFIX} {normalized_description}"
-    return _SILENT_DESCRIPTION_PREFIX
+    return sanitize_workflow_only_text(normalized_description)

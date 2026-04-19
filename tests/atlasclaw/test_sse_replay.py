@@ -55,3 +55,19 @@ async def test_closed_stream_replay_emits_lifecycle_end_for_late_subscriber():
     assert '"text": "hello"' in second_event["data"]
     assert third_event["event"] == "lifecycle"
     assert '"phase": "end"' in third_event["data"]
+
+
+def test_push_assistant_strips_tool_meta_block_contents():
+    manager = SSEManager()
+    run_id = "run-tool-meta"
+
+    manager.create_stream(run_id)
+    manager.push_assistant(
+        run_id,
+        "Visible before <tool_meta>secret internal metadata</tool_meta> visible after",
+    )
+
+    stream = manager.get_stream(run_id)
+
+    assert stream is not None
+    assert stream.events[-1].data["text"] == "Visible before  visible after"
