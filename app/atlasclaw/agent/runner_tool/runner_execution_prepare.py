@@ -1128,25 +1128,46 @@ class RunnerExecutionPreparePhaseMixin:
                 )
             # --- Skill affinity recovery from transcript ---
             # When metadata recall fails to produce a capability match,
-            # check whether the recent conversation contains tool calls
-            # from a known md_skill.  If so, recover that skill's context
-            # so the LLM can continue the workflow instead of losing all
-            # tool visibility.
-            if tool_intent_plan is None and not explicit_capability_match:
-                recovered_plan = _recover_skill_affinity_from_transcript(
-                    message_history=message_history,
-                    all_available_tools=all_available_tools,
+            # or when it selects a DIFFERENT skill than the one active in
+            # the recent transcript, recover the transcript skill's context
+            # so the LLM can continue the workflow correctly.
+            recovered_plan = _recover_skill_affinity_from_transcript(
+                message_history=message_history,
+                all_available_tools=all_available_tools,
+            )
+            if recovered_plan is not None:
+                recovered_skill = (
+                    recovered_plan.target_skill_names[0]
+                    if recovered_plan.target_skill_names
+                    else ""
                 )
-                if recovered_plan is not None:
+                # Case 1: No plan at all → use recovered plan.
+                # Case 2: Existing plan points to a different skill than the
+                #         one active in the transcript → override with the
+                #         transcript skill to maintain workflow continuity.
+                current_plan_skills = set(
+                    str(s).strip().lower()
+                    for s in (tool_intent_plan.target_skill_names or [])
+                ) if tool_intent_plan is not None else set()
+                transcript_skill_matches_plan = (
+                    recovered_skill.lower() in current_plan_skills
+                    if recovered_skill
+                    else False
+                )
+                should_recover = (
+                    (tool_intent_plan is None and not explicit_capability_match)
+                    or (
+                        tool_intent_plan is not None
+                        and not transcript_skill_matches_plan
+                        and recovered_skill
+                    )
+                )
+                if should_recover:
                     tool_intent_plan = recovered_plan
                     explicit_capability_match = True
                     _log_step(
                         "skill_affinity_recovered_from_transcript",
-                        recovered_skill=(
-                            recovered_plan.target_skill_names[0]
-                            if recovered_plan.target_skill_names
-                            else ""
-                        ),
+                        recovered_skill=recovered_skill,
                         recovered_tool_count=len(recovered_plan.target_tool_names),
                     )
             if tool_intent_plan is None and not explicit_capability_match:
