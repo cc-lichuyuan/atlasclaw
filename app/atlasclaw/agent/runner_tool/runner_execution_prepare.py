@@ -1263,12 +1263,33 @@ class RunnerExecutionPreparePhaseMixin:
                     skill_resolution_plan is None
                     and metadata_tool_intent_plan is not None
                 ):
-                    skill_resolution_plan = metadata_tool_intent_plan
+                    # When we have a transcript hint, refine the metadata
+                    # plan so the hinted skill ranks first for SKILL.md
+                    # loading.  This is context recovery (loading the right
+                    # reference document), not decision override.
+                    if (
+                        transcript_active_skill
+                        and metadata_tool_intent_plan.target_skill_names
+                    ):
+                        refined_skill_names = [transcript_active_skill] + [
+                            s
+                            for s in metadata_tool_intent_plan.target_skill_names
+                            if s != transcript_active_skill
+                        ]
+                        skill_resolution_plan = ToolIntentPlan(
+                            action=metadata_tool_intent_plan.action,
+                            target_skill_names=refined_skill_names,
+                            target_tool_names=metadata_tool_intent_plan.target_tool_names,
+                            target_capability_classes=metadata_tool_intent_plan.target_capability_classes,
+                        )
+                    else:
+                        skill_resolution_plan = metadata_tool_intent_plan
                     _log_step(
                         "follow_up_skill_doc_hint_from_metadata",
                         reason="routing_plan_absent_using_metadata_hint_for_skill_doc",
+                        transcript_hint_applied=bool(transcript_active_skill),
                         hint_skill_names=list(
-                            metadata_tool_intent_plan.target_skill_names or []
+                            (skill_resolution_plan.target_skill_names or [])
                         ),
                     )
             if should_resolve_target_md_skill(skill_resolution_plan):
