@@ -208,6 +208,83 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _infer_active_skill_from_transcript(
+    *,
+    message_history: list[dict[str, Any]],
+    md_skills_snapshot: list[dict[str, Any]],
+    max_scan: int = 20,
+) -> Optional[str]:
+    """Scan recent transcript tool calls to infer the currently active md skill.
+
+    Returns the qualified_name of the md_skill whose declared tools appear
+    most recently in the conversation.  This is used ONLY for SKILL.md
+    documentation loading during follow-up turns — it does NOT affect routing
+    or tool visibility.
+    """
+    if not message_history or not md_skills_snapshot:
+        return None
+
+    # Collect recent tool names from transcript (newest first)
+    recent_tool_names: list[str] = []
+    for msg in reversed(message_history[-max_scan:]):
+        if not isinstance(msg, dict):
+            continue
+        role = str(msg.get("role", "") or "").strip().lower()
+        if role != "tool":
+            continue
+        tool_name = str(msg.get("tool_name", "") or msg.get("name", "")).strip().lower()
+        if tool_name and tool_name not in recent_tool_names:
+            recent_tool_names.append(tool_name)
+
+    if not recent_tool_names:
+        return None
+
+    # Build skill -> declared_tool_names index from md_skills_snapshot
+    skill_tool_index: dict[str, set[str]] = {}
+    for skill in md_skills_snapshot:
+        if not isinstance(skill, dict):
+            continue
+        qname = str(
+            skill.get("qualified_name") or skill.get("name") or ""
+        ).strip().lower()
+        if not qname:
+            continue
+        metadata = skill.get("metadata", {})
+        if not isinstance(metadata, dict):
+            metadata = {}
+        declared = set()
+        # Extract tool names from metadata.tool_*_name keys (same pattern
+        # as _extract_md_tool_names in runner_prompt_context)
+        for key, value in metadata.items():
+            key_str = str(key)
+            if key_str.startswith("tool_") and key_str.endswith("_name"):
+                n = str(value or "").strip().lower()
+                if n:
+                    declared.add(n)
+        single = str(metadata.get("tool_name", "")).strip().lower()
+        if single:
+            declared.add(single)
+        # Also check pre-built declared_tool_names if available
+        for raw_list_key in ("declared_tool_names", "tool_names"):
+            for item in (metadata.get(raw_list_key) or skill.get(raw_list_key) or []):
+                n = str(item).strip().lower()
+                if n:
+                    declared.add(n)
+        if declared:
+            skill_tool_index[qname] = declared
+
+    if not skill_tool_index:
+        return None
+
+    # Pick the skill whose declared tools match the most-recent transcript tool
+    for tool_name in recent_tool_names:
+        for qname, declared_tools in skill_tool_index.items():
+            if tool_name in declared_tools:
+                return qname
+
+    return None
+
+
 def _artifact_classes_for_entry(entry: dict[str, Any]) -> set[str]:
     return {
         f"artifact:{str(item).strip().lower()}"
@@ -1152,11 +1229,66 @@ class RunnerExecutionPreparePhaseMixin:
                 coordination_tools=list(tool_projection_trace.get("coordination_tools", []) or []),
             )
             target_md_skill = None
-            if should_resolve_target_md_skill(tool_intent_plan):
+            # ── SKILL.md resolution ──────────────────────────────────────
+            # The skill_resolution_plan determines ONLY which SKILL.md is
+            # loaded as documentation context.  It does NOT change routing
+            # decisions or tool visibility (those are driven by
+            # tool_intent_plan which remains untouched).
+            #
+            # In follow-up turns (used_follow_up_context=True), the routing
+            # system often resolves to the wrong md-skill because short user
+            # inputs like "1" or "5" lack sufficient signal.  The transcript
+            # — which records which tools were actually called in earlier
+            # turns — provides a much stronger signal about which skill flow
+            # is currently active.
+            #
+            # Strategy:
+            #   1. follow-up + transcript match → use transcript skill
+            #   2. follow-up + no transcript match + plan absent → metadata hint
+            #   3. first turn / non-follow-up → use routing plan as-is
+            skill_resolution_plan = tool_intent_plan
+            if used_follow_up_context:
+                transcript_active_skill = _infer_active_skill_from_transcript(
+                    message_history=message_history,
+                    md_skills_snapshot=list(deps.extra.get("md_skills_snapshot") or []),
+                )
+                if transcript_active_skill:
+                    base_plan = skill_resolution_plan or metadata_tool_intent_plan
+                    if base_plan is not None:
+                        original_names = list(base_plan.target_skill_names or [])
+                        reordered = [transcript_active_skill] + [
+                            n for n in original_names
+                            if n.strip().lower() != transcript_active_skill
+                        ]
+                        skill_resolution_plan = base_plan.model_copy(
+                            update={"target_skill_names": reordered}
+                        )
+                        _log_step(
+                            "follow_up_skill_doc_hint_from_transcript",
+                            reason="transcript_tool_calls_indicate_active_skill",
+                            transcript_active_skill=transcript_active_skill,
+                            reordered_skill_names=reordered,
+                            original_plan_source=(
+                                "routing" if tool_intent_plan is not None else "metadata"
+                            ),
+                        )
+                elif (
+                    skill_resolution_plan is None
+                    and metadata_tool_intent_plan is not None
+                ):
+                    skill_resolution_plan = metadata_tool_intent_plan
+                    _log_step(
+                        "follow_up_skill_doc_hint_from_metadata",
+                        reason="routing_plan_absent_using_metadata_hint_for_skill_doc",
+                        hint_skill_names=list(
+                            metadata_tool_intent_plan.target_skill_names or []
+                        ),
+                    )
+            if should_resolve_target_md_skill(skill_resolution_plan):
                 target_md_skill = resolve_selected_md_skill_target(
                     agent=runtime_agent or self.agent,
                     deps=deps,
-                    intent_plan=tool_intent_plan,
+                    intent_plan=skill_resolution_plan,
                     max_file_bytes=int(
                         getattr(self.prompt_builder.config, "md_skills_max_file_bytes", 262144)
                         or 262144
