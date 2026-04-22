@@ -215,7 +215,8 @@ Multiple instances per provider type are supported. Instance names (`prod`, `dev
 
 ### 3.3 Webhook Configuration
 
-Configure inbound webhooks for provider-qualified skills already loaded from `providers_root` (for example, triggered by SmartCMP):
+Configure inbound webhooks for provider-qualified skills already loaded from
+`providers_root`:
 
 ```json
 {
@@ -225,11 +226,11 @@ Configure inbound webhooks for provider-qualified skills already loaded from `pr
     "header_name": "X-AtlasClaw-SK",
     "systems": [
       {
-        "system_id": "smartcmp-preapproval",
+        "system_id": "external-review",
         "enabled": true,
-        "sk_env": "ATLASCLAW_WEBHOOK_SK_SMARTCMP_PREAPPROVAL",
+        "sk_env": "ATLASCLAW_WEBHOOK_SK_EXTERNAL_REVIEW",
         "default_agent_id": "main",
-        "allowed_skills": ["smartcmp:preapproval-agent"]
+        "allowed_skills": ["external-review:review"]
       }
     ]
   }
@@ -461,16 +462,16 @@ Skills are the core extension mechanism — they define everything the Agent can
 | **Markdown (MD)** | `SKILL.md` injected into the Agent's system prompt | Knowledge, process guidelines |
 | **Hybrid** | Executable handler + rich `SKILL.md` documentation | Complex integrations |
 
-### 7.2 Skills Loading Priority
+### 7.2 Skill Loading Sources
 
-Skills are discovered at startup in the following order (later entries override earlier ones for duplicate names):
+AtlasClaw exposes capabilities from system-level runtime code, standalone skill
+packages, and provider-owned skill packages.
 
-| Priority | Location | Description |
-|----------|----------|-------------|
-| 1 (lowest) | `app/atlasclaw/providers/*/skills/` | Built-in provider skills |
-| 2 | `app/atlasclaw/skills/built_in/` | Core built-in skills |
-| 3 | `~/.atlasclaw/skills/` | User personal skills |
-| 4 (highest) | `skills/` (project root) | Workspace / project-level skills |
+| Source | Location | Notes |
+|--------|----------|-------|
+| System-level skills and tools | Core runtime (`app/atlasclaw/skills`, `app/atlasclaw/tools`) | Built-in capabilities owned by AtlasClaw core |
+| Standalone skills | `skills_root` if configured | Shared non-provider skill packages |
+| Provider-owned skills | `<providers_root>/<provider>/skills/` | Skills packaged with one provider |
 
 ### 7.3 Creating a Markdown Skill
 
@@ -555,70 +556,43 @@ Registered automatically at startup:
 
 ## 8. Providers Integration
 
-A Provider is a self-contained integration package connecting the Agent to an external enterprise system. It bundles authentication logic, Skills, configuration, and documentation.
+A Provider is an external integration package connecting the Agent to an
+enterprise system. AtlasClaw core loads providers from `providers_root`; the
+provider repository owns concrete provider behavior and examples.
 
 ### 8.1 Provider Structure
 
 ```
-providers/<provider-name>/
-├── PROVIDER.md              # Provider metadata and capabilities (required)
-├── README.md                # Human-readable description
+<providers_root>/<provider-name>/
+├── PROVIDER.md
+├── README.md
 └── skills/
     └── <skill-name>/
-        ├── SKILL.md         # Skill definition
-        └── scripts/
-            ├── handler.py   # Skill implementation
-            └── _utils.py    # Helpers
+        ├── SKILL.md
+        └── scripts/         # optional
 ```
 
-### 8.2 Available Providers
+### 8.2 Core / Provider Boundary
 
-**Jira Provider** (`app/atlasclaw/providers/jira/`):
-- Issue creation, retrieval, update, deletion, listing
-- JQL search
-- Project / component / issue-type metadata
-- Configuration: see [Section 3.2](#32-service-providers-configuration)
+Core documentation covers:
 
-**SmartCMP Provider** (external, `AtlasClaw-Providers/SmartCMP-Provider/`):
-- Approval workflow management
-- Skills: list pending approvals, approve / reject / retreat / cancel / batch process
+- loading providers from `providers_root`
+- system-level skills and channels owned by core
+- provider metadata and configuration contracts
+- runtime behavior such as instance selection and permission propagation
 
-### 8.3 Provider Locations
+Provider repositories cover:
 
-| Location | Path | Priority |
-|----------|------|----------|
-| Built-in | `app/atlasclaw/providers/<name>/` | Lowest |
-| Workspace | `{workspace}/providers/<name>/` | Higher |
-| User | `~/.atlasclaw/providers/<name>/` | Highest |
+- target-system auth models
+- provider-specific fields and workflow semantics
+- provider-specific UI copy, webhook examples, and operator guidance
 
-### 8.4 SmartCMP Approval Skill — Quick Usage
+### 8.3 Adding A Custom Provider
 
-**Prerequisites:**
-
-```powershell
-$env:CMP_URL    = "https://<host>/platform-api"
-$env:CMP_COOKIE = "<full cookie string>"
-```
-
-**Conversation example:**
-
-```
-User:  Show my pending approvals
-Agent: (lists pending approvals with index numbers)
-
-User:  Approve #1
-Agent: Confirm approving "<approval name>"?
-
-User:  Confirm
-Agent: Approved successfully!
-```
-
-### 8.5 Adding a Custom Provider
-
-1. Create `providers/<name>/` with `PROVIDER.md` and `skills/`
-2. Add skills following [Section 7.3](#73-creating-a-markdown-skill) / [7.4](#74-creating-an-executable-skill)
-3. Register the instance in `atlasclaw.json` under `service_providers`
-4. Restart the service — provider is discovered automatically
+1. Create the package under `providers_root`
+2. Add `PROVIDER.md` and provider-owned skills
+3. Register instances under `service_providers`
+4. Restart or reload AtlasClaw so the package is discovered
 
 See [PROVIDER-GUIDE.MD](./PROVIDER-GUIDE.MD) for the complete guide.
 
@@ -998,7 +972,6 @@ AtlasClaw-Core/
 │       ├── channels/           # Channel adapters (REST, SSE, WebSocket)
 │       ├── core/               # Config, dependency injection, provider registry
 │       ├── memory/             # Long-term memory (vector + full-text)
-│       ├── providers/          # Built-in system integrations (Jira, etc.)
 │       ├── session/            # Session persistence and management
 │       ├── skills/             # Skill loading and registry
 │       ├── tools/              # Built-in tool suite

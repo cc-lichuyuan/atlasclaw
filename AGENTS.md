@@ -2,6 +2,9 @@
 
 Coding guidelines for AI assistants working on the AtlasClaw enterprise agent framework.
 
+Concrete provider packages do not live in this repository. AtlasClaw core loads
+them through `providers_root`, typically from a sibling providers repository.
+
 ## Build / Test / Lint Commands
 
 ### Backend (Python)
@@ -65,7 +68,7 @@ Before making any feature changes, bug fixes, or architectural decisions, consul
 
 | Document | Content |
 |----------|---------|
-| [Provider Guide](docs/PROVIDER_GUIDE.md) | Creating and deploying provider integrations |
+| [Provider Guide](docs/PROVIDER-GUIDE.MD) | Core-side provider contract and external loading model |
 | [Skill Guide](docs/SKILL_GUIDE.md) | Creating executable, markdown, and hybrid skills |
 | [Channel Guide](docs/Channel%20Guide.md) | Channel handler implementation and integration |
 | [Guide](docs/GUIDE.md) | End-user/developer usage guide |
@@ -156,9 +159,8 @@ AtlasClaw-Core/
 │   ├── api/              # REST, WebSocket, SSE endpoints
 │   ├── auth/             # Authentication, authorization
 │   ├── channels/         # Channel adapters (WebSocket, SSE, REST)
-│   ├── core/             # Config, dependencies, provider registry
+│   ├── core/             # Config, dependencies, provider registry, provider loading
 │   ├── memory/           # Memory manager and retrieval
-│   ├── providers/        # Built-in provider integrations
 │   ├── session/          # Session management
 │   ├── skills/           # Skill loading and registry
 │   └── tools/            # Built-in tools
@@ -170,6 +172,10 @@ AtlasClaw-Core/
 └── openspec/             # Specification-driven development
     └── AGENTS.md         # OpenSpec workflow guide
 ```
+
+Concrete providers are external packages loaded through `providers_root`. This
+repository owns the runtime, contracts, and loading behavior, not provider
+implementations.
 
 ## Configuration
 
