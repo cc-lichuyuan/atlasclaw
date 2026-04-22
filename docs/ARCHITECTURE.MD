@@ -251,10 +251,6 @@ app/atlasclaw/
 |  |- link_extractor.py          # URL extraction from text
 |  |- tts.py                     # Text-to-speech
 |  \- understanding.py           # Media content understanding
-\- providers/                     # Built-in provider integrations
-   \- <provider>/
-      |- PROVIDER.md             # Provider documentation + LLM context
-      \- skills/                 # Provider-specific skills
 
 app/frontend/
 |- index.html                     # Main chat interface
@@ -282,13 +278,6 @@ tests/
 |  \- ...
 \- frontend/                      # JavaScript tests
 
-providers/                         # Provider repository (code/templates)
-\- <provider_name>/
-   |- PROVIDER.md
-   |- auth/
-   |- channels/
-   \- skills/
-
 <workspace>/                       # Runtime workspace (default: ./.atlasclaw)
 |- agents/
 |  \- main/
@@ -302,6 +291,10 @@ providers/                         # Provider repository (code/templates)
       |- sessions/                 # JSONL session transcripts
       \- memory/                  # Markdown memory files
 ```
+
+Concrete providers are external packages discovered through `providers_root`.
+This repository documents runtime code, contracts, and loading behavior, not
+provider implementations.
 
 ---
 
@@ -628,28 +621,30 @@ AtlasClaw provides four main extension mechanisms:
 
 ### 9.1 Provider Extension
 
-Providers are the primary extension point. A provider is a directory containing:
+Providers are external integration packages loaded through `providers_root`. A
+provider package contains:
 
 ```text
-<provider>/
+<providers_root>/<provider>/
 |- PROVIDER.md          # Documentation + LLM context (frontmatter)
 \- skills/
    |- skill-name/
    |  |- SKILL.md       # Skill documentation + frontmatter
-   |  \- handler.py     # Executable skill (optional)
+   |  \- scripts/       # Executable handlers and helpers
    \- ...
 ```
 
-**Discovery**: `ProviderScanner` walks the providers directory at startup. Provider directories can also contribute auth providers and channel handlers.
+**Discovery**: `ServiceProviderRegistry` loads provider templates and metadata
+from `providers_root`. Startup then loads provider-owned skills from each
+provider package's `skills/` directory.
 
-**Instance Awareness**: A single provider type (e.g., "jira") can have multiple instances (e.g., "production", "staging"). `ServiceProviderRegistry` wraps skill handlers with automatic instance selection logic.
+**Instance Awareness**: A single provider type (e.g., "my-provider") can have
+multiple instances (e.g., "production", "staging"). `ServiceProviderRegistry`
+wraps skill handlers with automatic instance selection logic.
 
-**Locations** (override priority):
-1. Workspace: `<workspace>/skills/` (optional, for development)
-2. Global: `~/.atlasclaw/skills/`
-3. Skills root: `<skills_root>/` (configured in atlasclaw.json, default: `../atlasclaw-providers/skills`)
-4. Providers: `<providers_root>/<provider>/skills/` (configured in atlasclaw.json, default: `../atlasclaw-providers/providers`)
-5. Built-in: `app/atlasclaw/providers/`
+**Locations**:
+1. Provider packages: `<providers_root>/<provider>/`
+2. Provider-owned skills: `<providers_root>/<provider>/skills/`
 
 ### 9.2 Skill Extension
 
@@ -661,12 +656,16 @@ Skills are atomic, composable capabilities:
 | **Markdown** | LLM prompt/instruction in Markdown | `SKILL.md` only |
 | **Hybrid** | Executable with Markdown documentation | Both files |
 
-**Loading Priority**: workspace ->providers ->global ->built-in
+**Loading Sources**:
+1. System-level capabilities owned by core
+2. Standalone skills loaded from `skills_root`
+3. Provider-owned skills loaded from `<providers_root>/<provider>/skills/`
 
 **Registration**: `SkillRegistry.register()` for Python skills; `SkillRegistry.load_md_skills()` for Markdown skills. All skills are registered with the PydanticAI agent via `register_to_agent()`.
 
 ### 9.3 Channel Extension
 
+Channel handlers are part of core and live under `app/atlasclaw/channels`.
 Custom channel handlers implement `ChannelHandler` ABC:
 
 - `setup(connection_config)` -Initialize with config
@@ -1035,4 +1034,3 @@ All sensitive data is encrypted at rest using **AES-256-GCM**:
 > | Channel integration | [Channel Guide](./CHANNEL-GUIDE.MD) | Full document |
 > | Deployment & operations | [Deployment](./DEPLOYMENT.MD) | Full document |
 > | User/developer guide | [Overview](./OVERVIEW.MD) | Full document |
-

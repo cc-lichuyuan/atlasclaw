@@ -1,5 +1,9 @@
 > [!NOTE]
 > This repository contains the AtlasClaw core implementation, including the agent runtime, API layer, channel adapters, provider registry, skills, tools, and session/memory management，see [atlasclaw.ai](https://atlasclaw.ai/).
+>
+> Concrete providers are not implemented in this repository. AtlasClaw loads
+> provider packages from `providers_root`. In a sibling-repository layout, a
+> common value is `../atlasclaw-providers/providers`.
 
 # AtlasClaw
 
@@ -141,9 +145,12 @@ AtlasClaw uses `atlasclaw.json` for configuration. Create a configuration file i
 }
 ```
 
+The example above assumes a sibling `atlasclaw-providers` repository. The
+schema default for `providers_root` remains `../providers`.
+
 Configuration options:
 
-- `providers_root` - Root directory for external provider templates and skills, resolved relative to `atlasclaw.json`
+- `providers_root` - Root directory for provider packages, resolved relative to `atlasclaw.json` (schema default: `../providers`)
 - Provider skills discovered under `providers_root` are registered as `provider:skill` to avoid name collisions
 - `model.primary` - Primary model in format `provider/model-name`
 - `model.providers` - Provider configurations with `base_url`, `api_key`, and `api_type`
@@ -229,7 +236,7 @@ npm test
 - Entry point: `app/atlasclaw/main.py` - FastAPI application with lifespan management
 - The API surface lives under `app/atlasclaw/api/`
 - Core orchestration logic lives under `app/atlasclaw/agent/`, `app/atlasclaw/workflow/`, and `app/atlasclaw/tools/`
-- Provider integrations are loaded from `providers_root` (default: `../providers`)
+- Provider integrations are loaded from `providers_root` (schema default: `../providers`; common sibling-repo layout: `../atlasclaw-providers/providers`)
 
 If you are integrating AtlasClaw into a host service, start by wiring the API layer, execution context, provider registry, and session manager together in your application bootstrap.
 
