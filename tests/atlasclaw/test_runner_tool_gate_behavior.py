@@ -570,7 +570,7 @@ def test_resolve_contextual_tool_request_reuses_previous_request_for_structured_
     assert used_follow_up_context is True
 
 
-def test_resolve_contextual_tool_request_reuses_previous_request_for_whitespace_separated_chinese_fields() -> None:
+def test_resolve_contextual_tool_request_does_not_treat_whitespace_field_pairs_as_generic_follow_up() -> None:
     runner = _GateRunner()
 
     resolved, used_follow_up_context = runner._resolve_contextual_tool_request(
@@ -589,8 +589,8 @@ def test_resolve_contextual_tool_request_reuses_previous_request_for_whitespace_
         ],
     )
 
-    assert resolved == "我要申请一台 2C4G 的 Linux 虚拟机\n用户名 root 密码 Passw0rd 名称 linux-test123"
-    assert used_follow_up_context is True
+    assert resolved == "用户名 root 密码 Passw0rd 名称 linux-test123"
+    assert used_follow_up_context is False
 
 
 def test_resolve_contextual_tool_request_recognizes_enumerated_field_prompt_without_markers() -> None:

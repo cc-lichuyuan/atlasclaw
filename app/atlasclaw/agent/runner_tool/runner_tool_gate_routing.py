@@ -428,52 +428,6 @@ class RunnerToolGateRoutingMixin:
             ]
             if len(informative_parts) >= 2:
                 return True
-
-        # Handle compact follow-ups like "用户名 root 密码 Passw0rd 名称 vm-1"
-        # where the user replies with field/value pairs but no punctuation.
-        field_label_pattern = re.compile(
-            "|".join(
-                [
-                    r"resource\s+name",
-                    r"vm\s+name",
-                    r"business\s+group",
-                    r"user\s*name",
-                    r"username",
-                    r"password",
-                    r"tenant",
-                    r"department",
-                    r"project",
-                    r"name",
-                    r"资源名称",
-                    r"虚拟机名称",
-                    r"业务组",
-                    r"用户名",
-                    r"密码",
-                    r"租户",
-                    r"部门",
-                    r"项目",
-                    r"名称",
-                    r"cpu",
-                    r"memory",
-                    r"内存",
-                ]
-            ),
-            flags=re.IGNORECASE,
-        )
-        matches = list(field_label_pattern.finditer(normalized))
-        if len(matches) < 2:
-            return False
-
-        informative_segments = 0
-        for index, match in enumerate(matches):
-            next_start = matches[index + 1].start() if index + 1 < len(matches) else len(normalized)
-            value = normalized[match.end():next_start]
-            value = value.lstrip(" :=：,，;；|/-")
-            value = value.strip()
-            if len(re.sub(r"\s+", "", value)) >= 1:
-                informative_segments += 1
-            if informative_segments >= 2:
-                return True
         return False
     @staticmethod
     def _build_classifier_history(
