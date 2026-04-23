@@ -13,7 +13,6 @@ from app.atlasclaw.agent.runner_tool.runner_agent_override import (
 )
 from app.atlasclaw.core.deps import SkillDeps
 from app.atlasclaw.core.trace import bind_trace_context, resolve_trace_context
-from app.atlasclaw.session.context import SessionKey
 
 class RunnerExecutionRuntimeMixin:
     async def _resolve_runtime_agent(
@@ -104,14 +103,10 @@ class RunnerExecutionRuntimeMixin:
         """Backward-compatible helper returning only resolved token count."""
         return self._resolve_runtime_context_window_info(selected_token_id, deps).tokens
     def _resolve_session_manager(self, session_key: str, deps: SkillDeps) -> Any:
-        """Resolve the correct per-user session manager for the active session."""
-        parsed = SessionKey.from_string(session_key)
+        """Resolve the session manager scoped to the authenticated runtime user."""
         scoped_manager = getattr(deps, "session_manager", None)
-        scoped_user_id = getattr(scoped_manager, "user_id", None)
-        if scoped_manager is not None and scoped_user_id == parsed.user_id:
+        if scoped_manager is not None:
             return scoped_manager
-        if self.session_manager_router is not None:
-            return self.session_manager_router.for_session_key(session_key)
         return self.sessions
     async def _maybe_set_draft_title(
         self,

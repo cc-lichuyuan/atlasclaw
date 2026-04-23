@@ -3,6 +3,7 @@
  */
 
 import { buildApiUrl, buildAppUrl, rewriteManagedAppUrl } from './config.js'
+import { clearSession } from './session-manager.js'
 
 const AUTH_STORAGE_KEY = 'atlasclaw_auth_token'
 const AUTH_HEADER_NAME = 'AtlasClaw-Authenticate'
@@ -122,6 +123,7 @@ export async function login(username, password) {
   if (token) {
     setAuthToken(token)
   }
+  clearSession()
 
   return data
 }
@@ -134,6 +136,7 @@ export async function logout({ redirect = true } = {}) {
     })
   } finally {
     clearAuthToken()
+    clearSession()
     if (redirect) {
       window.location.href = buildAppUrl('/login.html')
     }

@@ -10,6 +10,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request, status
 
 from ..auth.models import ANONYMOUS_USER, UserInfo
+from ..session.context import SessionKey
 from .deps_context import APIContext, get_api_context
 from .schemas import AgentRunRequest, AgentRunResponse, AgentStatusResponse
 from .services.run_service import (
@@ -22,6 +23,23 @@ from .services.run_service import (
 )
 
 
+async def _ensure_runnable_session(ctx: APIContext, auth_user: UserInfo, session_key: str) -> None:
+    parsed = SessionKey.from_string(session_key)
+    if parsed.user_id != auth_user.user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_key}",
+        )
+
+    manager = ctx.session_manager_router.for_user(auth_user.user_id)
+    session = await manager.get_session(session_key)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Session not found: {session_key}",
+        )
+
+
 def register_agent_routes(router: APIRouter) -> None:
     @router.post("/agent/run", response_model=AgentRunResponse)
     async def start_agent_run(
@@ -32,6 +50,7 @@ def register_agent_routes(router: APIRouter) -> None:
     ) -> AgentRunResponse:
         run_id = str(uuid.uuid4())
         user_info: UserInfo = getattr(request_obj.state, "user_info", ANONYMOUS_USER)
+        await _ensure_runnable_session(ctx, user_info, request.session_key)
         request_cookies = dict(request_obj.cookies)
         provider_config = build_provider_config(ctx)
         safe_message = normalize_user_message(request.message)
