@@ -29,6 +29,7 @@ from fastapi.testclient import TestClient
 
 from app.atlasclaw.agent.stream import StreamEvent
 from app.atlasclaw.api.routes import APIContext, create_router, set_api_context
+from app.atlasclaw.auth.models import UserInfo
 from app.atlasclaw.session.manager import SessionManager
 from app.atlasclaw.session.queue import SessionQueue
 from app.atlasclaw.skills.registry import SkillRegistry
@@ -50,11 +51,21 @@ class _FailingRunner:
         yield StreamEvent.lifecycle_end()
 
 
+class _RecordingRunner(_StreamingRunner):
+    def __init__(self):
+        self.called = False
+
+    async def run(self, *args, **kwargs):
+        self.called = True
+        async for event in super().run(*args, **kwargs):
+            yield event
+
+
 def _build_client(tmp_path) -> TestClient:
     return _build_client_with_runner(tmp_path, _StreamingRunner())
 
 
-def _build_client_with_runner(tmp_path, runner) -> TestClient:
+def _build_client_with_runner(tmp_path, runner, *, user_id: str = "anonymous") -> TestClient:
     ctx = APIContext(
         session_manager=SessionManager(agents_dir=str(tmp_path / "agents")),
         session_queue=SessionQueue(),
@@ -64,6 +75,12 @@ def _build_client_with_runner(tmp_path, runner) -> TestClient:
     set_api_context(ctx)
 
     app = FastAPI()
+
+    @app.middleware("http")
+    async def inject_user_info(request, call_next):
+        request.state.user_info = UserInfo(user_id=user_id, display_name=user_id)
+        return await call_next(request)
+
     app.include_router(create_router())
     return TestClient(app)
 
@@ -135,3 +152,52 @@ def test_agent_run_status_is_error_when_stream_reports_failure(tmp_path):
     payload = status_response.json()
     assert payload["status"] == "error"
     assert "tool execution failed" in str(payload.get("error", ""))
+
+
+def test_agent_run_rejects_other_users_session_key_before_runner_starts(tmp_path):
+    bob_client = _build_client_with_runner(tmp_path, _StreamingRunner(), user_id="bob")
+    bob_session = bob_client.post("/api/sessions", json={})
+    assert bob_session.status_code == 200
+    bob_session_key = bob_session.json()["session_key"]
+
+    alice_runner = _RecordingRunner()
+    alice_client = _build_client_with_runner(tmp_path, alice_runner, user_id="alice")
+
+    response = alice_client.post(
+        "/api/agent/run",
+        json={"session_key": bob_session_key, "message": "hi", "timeout_seconds": 30},
+    )
+
+    assert response.status_code == 404
+    assert alice_runner.called is False
+
+
+def test_agent_run_rejects_missing_current_user_session_key(tmp_path):
+    runner = _RecordingRunner()
+    client = _build_client_with_runner(tmp_path, runner, user_id="alice")
+    missing_session_key = "agent:main:user:alice:web:dm:alice:topic:missing-thread"
+
+    response = client.post(
+        "/api/agent/run",
+        json={"session_key": missing_session_key, "message": "hi", "timeout_seconds": 30},
+    )
+
+    assert response.status_code == 404
+    assert runner.called is False
+
+
+def test_agent_run_accepts_current_users_existing_session_key(tmp_path):
+    runner = _RecordingRunner()
+    client = _build_client_with_runner(tmp_path, runner, user_id="alice")
+    session = client.post("/api/sessions", json={})
+    assert session.status_code == 200
+    session_key = session.json()["session_key"]
+
+    response = client.post(
+        "/api/agent/run",
+        json={"session_key": session_key, "message": "hi", "timeout_seconds": 30},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["session_key"] == session_key
+    assert runner.called is True
