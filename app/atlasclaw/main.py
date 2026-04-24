@@ -133,23 +133,6 @@ _heartbeat_store: Optional[HeartbeatStateStore] = None
 _heartbeat_task: Optional[asyncio.Task] = None
 
 
-def _normalize_enabled_skill_names(raw_values: Any) -> set[str]:
-    """Normalize explicitly enabled standalone markdown skill names from config."""
-    if isinstance(raw_values, str):
-        candidates = [raw_values]
-    elif isinstance(raw_values, (list, tuple, set)):
-        candidates = list(raw_values)
-    else:
-        candidates = []
-
-    return {
-        str(value or "").strip().lower()
-        for value in candidates
-        if str(value or "").strip()
-    }
-
-
-
 def _list_workspace_runtime_user_ids(workspace_path: str | Path) -> set[str]:
     users_dir = Path(workspace_path).resolve() / "users"
     if not users_dir.exists():
@@ -215,12 +198,13 @@ async def _collect_runtime_user_ids(
     )
 
 async def _ensure_admin_default_skill_permissions(skill_registry) -> None:
-    """Seed admin role skill_permissions when DB has none stored.
+    """Seed admin role skill_permissions from the *complete* skill catalog.
 
-    Without stored permissions the runtime filter treats empty as "allow all".
-    This one-time bootstrap writes sensible defaults (all executable skills
-    enabled, markdown skills disabled) so the runtime matches the admin UI
-    default without relying on the frontend to auto-PUT on page load.
+    The catalog includes both built-in executable tools (tools_snapshot) and
+    markdown skills (md_snapshot).  Admin should default to all-enabled so
+    that a freshly initialized system does not lose any built-in capability.
+
+    Only runs when the admin role has no stored skill_permissions yet.
     """
     try:
         from app.atlasclaw.db.database import get_db_manager
@@ -244,24 +228,50 @@ async def _ensure_admin_default_skill_permissions(skill_registry) -> None:
                 # Already has stored skill permissions – do not overwrite.
                 return
 
-            # Build default skill permissions from the loaded skill catalog.
-            md_skills = skill_registry.md_snapshot()
-            if not md_skills:
-                return
+            # ---- Build from the FULL catalog ----
+            seen_ids: set[str] = set()
+            default_skill_permissions: list[dict] = []
 
-            default_skill_permissions = []
+            # 1. Built-in executable tools (from tools_snapshot)
+            tools_snap = skill_registry.tools_snapshot()
+            for tool in tools_snap:
+                tool_name = str(tool.get("name", "") or "").strip()
+                if not tool_name or tool_name in seen_ids:
+                    continue
+                seen_ids.add(tool_name)
+                default_skill_permissions.append({
+                    "skill_id": tool_name,
+                    "skill_name": tool_name,
+                    "description": tool.get("description", ""),
+                    "runtime_enabled": True,
+                    "authorized": True,
+                    "enabled": True,
+                })
+
+            # 2. Markdown skills (from md_snapshot)
+            md_skills = skill_registry.md_snapshot()
             for md in md_skills:
+                md_name = str(md.get("name", "") or "").strip()
+                md_qname = str(md.get("qualified_name", "") or "").strip()
+                # Use qualified_name as skill_id to match runtime filter logic
+                skill_id = md_qname or md_name
+                if not skill_id or skill_id in seen_ids:
+                    continue
+                seen_ids.add(skill_id)
                 md_meta = md.get("metadata") or {}
                 skill_type = str(md_meta.get("type", "") or "").strip().lower()
                 is_executable = skill_type == "executable"
                 default_skill_permissions.append({
-                    "skill_id": md.get("name", ""),
-                    "skill_name": md.get("name", ""),
+                    "skill_id": skill_id,
+                    "skill_name": md_name,
                     "description": md.get("description", ""),
                     "runtime_enabled": True,
-                    "authorized": is_executable,
-                    "enabled": is_executable,
+                    "authorized": True,
+                    "enabled": True,
                 })
+
+            if not default_skill_permissions:
+                return
 
             new_perms = dict(perms)
             new_perms["skills"] = {
@@ -272,7 +282,8 @@ async def _ensure_admin_default_skill_permissions(skill_registry) -> None:
             await session.commit()
             print(
                 f"[AtlasClaw] Bootstrapped admin default skill permissions "
-                f"({len(default_skill_permissions)} skills)"
+                f"({len(default_skill_permissions)} entries: "
+                f"{len(tools_snap)} executable + {len(md_skills)} markdown)"
             )
     except Exception as e:
         print(f"[AtlasClaw] Warning: Failed to bootstrap admin skill permissions: {e}")
@@ -491,17 +502,12 @@ async def lifespan(app: FastAPI):
 
     loaded_standalone_skill_count = 0
     if skills_root.exists():
-        _enabled_standalone = _normalize_enabled_skill_names(
-            config.skills.enabled_skills
-        ) or None  # None means "load all" (no filter)
         loaded_standalone_skill_count = _skill_registry.load_from_directory(
             str(skills_root),
             location="skills-root",
-            allowed_skill_names=_enabled_standalone,
         )
     print(
         f"[AtlasClaw] Loaded {loaded_standalone_skill_count} standalone markdown skills"
-        + (f" (allowed: {sorted(_enabled_standalone)})" if skills_root.exists() and _enabled_standalone else "")
     )
 
     # Bootstrap admin role default skill permissions if not yet stored.

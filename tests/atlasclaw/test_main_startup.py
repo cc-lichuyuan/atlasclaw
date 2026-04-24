@@ -78,12 +78,12 @@ class TestMainStartup:
             assert resp.status_code == 200
             assert resp.json()["status"] == "healthy"
 
-    def test_startup_loads_only_configured_provider_and_enabled_standalone_skills(
+    def test_startup_loads_all_provider_and_standalone_skills(
         self,
         tmp_path,
         monkeypatch,
     ):
-        """enabled_skills filters standalone skills; provider skills always load."""
+        """All skills are loaded into catalog; RBAC controls visibility at runtime."""
         import importlib
 
         import app.atlasclaw.core.config as config_module
@@ -128,9 +128,6 @@ class TestMainStartup:
                             }
                         }
                     },
-                    "skills": {
-                        "enabled_skills": ["github"],
-                    },
                     "model": {
                         "primary": "test-token",
                         "tokens": [
@@ -168,10 +165,10 @@ class TestMainStartup:
 
                 # Provider skills load from ALL provider dirs (hot-update safe)
                 assert "smartcmp:request" in md_skills
-                assert "jira:jira-issue" in md_skills  # loaded even without instance
-                # Standalone skills filtered by enabled_skills config
+                assert "jira:jira-issue" in md_skills
+                # ALL standalone skills are loaded (no config allowlist)
                 assert "github" in loaded_names
-                assert "pptx" not in loaded_names
+                assert "pptx" in loaded_names
         finally:
             config_module._config_manager = old_manager
 
