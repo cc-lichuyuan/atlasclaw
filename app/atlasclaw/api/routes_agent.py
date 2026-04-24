@@ -57,31 +57,55 @@ def register_agent_routes(router: APIRouter) -> None:
         safe_message = normalize_user_message(request.message)
         init_run(ctx, run_id, request.session_key, safe_message, request.timeout_seconds)
 
-        # Resolve user skill permissions for agent context filtering
-        user_skill_permissions = []
+        # Resolve user skill permissions for agent context filtering.
+        # This is fail-closed: if permission resolution fails, the run is
+        # rejected rather than falling through with an empty permission list
+        # (which downstream interprets as "allow all").
+        # When the database is not initialized (anonymous mode), skip the
+        # check entirely -- there is no RBAC layer to enforce.
+        import logging as _logging
+        _perm_log = _logging.getLogger("atlasclaw.agent_routes")
+        user_skill_permissions: list[dict] = []
         try:
             from app.atlasclaw.db.database import get_db_manager
-            manager = get_db_manager()
-            db_session = manager._session_factory()
-            try:
-                from ..auth.guards import resolve_authorization_context
-                authz = await resolve_authorization_context(db_session, user_info)
-                user_skill_permissions = (
-                    authz.permissions.get("skills", {}).get("skill_permissions", [])
-                )
-                import logging
-                _log = logging.getLogger("atlasclaw.agent_routes")
-                disabled_skills = [s.get("skill_id") for s in user_skill_permissions if not s.get("enabled")]
-                _log.info(f"[SkillFilter] user={user_info.user_id} total_perms={len(user_skill_permissions)} disabled={disabled_skills}")
-                await db_session.commit()
-            except Exception as exc:
-                await db_session.rollback()
-                import logging
-                logging.getLogger("atlasclaw.agent_routes").error(f"[SkillFilter] Failed to resolve permissions: {exc}")
-            finally:
-                await db_session.close()
-        except Exception:
-            pass
+            db_mgr = get_db_manager()
+            if db_mgr is None or db_mgr._session_factory is None:
+                # No database configured (anonymous / file-only mode) -- skip RBAC.
+                _perm_log.debug("[SkillFilter] No DB available, skipping permission resolution")
+            else:
+                db_session = db_mgr._session_factory()
+                try:
+                    from ..auth.guards import resolve_authorization_context
+                    authz = await resolve_authorization_context(db_session, user_info)
+                    user_skill_permissions = (
+                        authz.permissions.get("skills", {}).get("skill_permissions", [])
+                    )
+                    disabled_skills = [
+                        s.get("skill_id") for s in user_skill_permissions
+                        if not s.get("enabled")
+                    ]
+                    _perm_log.info(
+                        "[SkillFilter] user=%s total_perms=%d disabled=%s",
+                        user_info.user_id, len(user_skill_permissions), disabled_skills,
+                    )
+                    await db_session.commit()
+                except Exception as exc:
+                    await db_session.rollback()
+                    _perm_log.error("[SkillFilter] Permission resolution failed (fail-closed): %s", exc)
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to resolve skill permissions for this run.",
+                    ) from exc
+                finally:
+                    await db_session.close()
+        except HTTPException:
+            raise
+        except Exception as exc:
+            _perm_log.error("[SkillFilter] DB access failed (fail-closed): %s", exc)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to resolve skill permissions for this run.",
+            ) from exc
 
         request_context = request.context or {}
         if user_skill_permissions:

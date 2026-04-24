@@ -798,32 +798,6 @@ async function loadRoles(preserveRoleId = selectedRoleId) {
   const rawRoles = Array.isArray(data?.roles) ? data.roles : []
   roles = rawRoles.map(role => normalizeRole(role, skills))
 
-  // Auto-persist admin default skill permissions if not yet stored in DB.
-  // Without this, the runtime filter sees empty permissions and allows all skills,
-  // even though the UI shows markdown skills as disabled by default.
-  for (const raw of rawRoles) {
-    if (raw?.is_builtin && raw?.identifier === 'admin') {
-      const storedSkillPerms = raw.permissions?.skills?.skill_permissions
-      if (!Array.isArray(storedSkillPerms) || storedSkillPerms.length === 0) {
-        const normalized = roles.find(r => r.id === raw.id)
-        if (normalized) {
-          try {
-            const payload = { permissions: buildPermissionsPayload(normalized) }
-            await fetchJson(`/api/roles/${raw.id}`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-            })
-            console.log('[RoleManagement] Auto-persisted admin default skill permissions')
-          } catch (e) {
-            console.warn('[RoleManagement] Failed to auto-persist admin skill defaults:', e)
-          }
-        }
-      }
-      break
-    }
-  }
-
   if (preserveRoleId === 'new-role' && draftRoleState?.isNew) {
     selectedRoleId = 'new-role'
     return

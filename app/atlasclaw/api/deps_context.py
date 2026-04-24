@@ -272,14 +272,15 @@ def build_scoped_deps(
             _all_md,
             user_skill_permissions,
         )
-        # Build a set of handler tool names from DISABLED md_skills so the
-        # runner can remove them from the agent-registered tools as well.
+        # Collect ALL disabled skill IDs (both md and executable)
         _disabled_skill_ids: set[str] = set()
         for sp_entry in user_skill_permissions:
             if isinstance(sp_entry, dict) and not (sp_entry.get("enabled") and sp_entry.get("authorized")):
                 _sid = _normalize_skill_id(sp_entry.get("skill_id") or sp_entry.get("skill_name") or "")
                 if _sid:
                     _disabled_skill_ids.add(_sid)
+
+        # 1. Extract handler tool names from disabled md_skills metadata
         for md_entry in _all_md:
             _qname = _normalize_skill_id(md_entry.get("qualified_name") or md_entry.get("name") or "")
             _bare = _qname.split(":")[-1] if _qname else ""
@@ -291,6 +292,20 @@ def build_scoped_deps(
                         _tname = str(value or "").strip()
                         if _tname:
                             disabled_tool_names.add(_tname)
+
+        # 2. Also get tool names from registry._md_skill_tools mapping
+        #    This catches executable skills registered from md SKILL.md entrypoints
+        _md_skill_tools_map = getattr(ctx.skill_registry, "_md_skill_tools", {})
+        if isinstance(_md_skill_tools_map, dict):
+            for qual_name, tool_names_set in _md_skill_tools_map.items():
+                _qnorm = _normalize_skill_id(qual_name)
+                _bare = _qnorm.split(":")[-1] if _qnorm else ""
+                if _bare in _disabled_skill_ids or _qnorm in _disabled_skill_ids:
+                    for tn in (tool_names_set or set()):
+                        _tname = str(tn or "").strip()
+                        if _tname:
+                            disabled_tool_names.add(_tname)
+
         import logging as _log_mod
         _filter_log = _log_mod.getLogger("atlasclaw.skill_filter")
         _filter_log.info(
@@ -319,11 +334,21 @@ def build_scoped_deps(
             ),
         ),
     }
-    # Expose disabled tool names for runner-level tool filtering.
+    # Expose disabled tool names AND disabled skill IDs for runner-level filtering.
     # The runner's collect_tools_snapshot supplements from the agent object,
-    # so the runner needs this set to exclude disabled-skill handler tools.
+    # so the runner needs both sets to exclude disabled-skill handler tools.
     if disabled_tool_names:
         deps_extra["_disabled_tool_names"] = disabled_tool_names
+    if isinstance(user_skill_permissions, list) and user_skill_permissions:
+        # Also pass disabled skill IDs so the runner can filter by skill_name field
+        _d_ids = set()
+        for sp_entry in user_skill_permissions:
+            if isinstance(sp_entry, dict) and not (sp_entry.get("enabled") and sp_entry.get("authorized")):
+                _sid = _normalize_skill_id(sp_entry.get("skill_id") or sp_entry.get("skill_name") or "")
+                if _sid:
+                    _d_ids.add(_sid)
+        if _d_ids:
+            deps_extra["_disabled_skill_ids"] = _d_ids
     if extra:
         deps_extra.update(extra)
     deps_extra = enrich_trace_metadata(session_key, extra=deps_extra)

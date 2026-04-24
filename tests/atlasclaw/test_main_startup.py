@@ -83,7 +83,7 @@ class TestMainStartup:
         tmp_path,
         monkeypatch,
     ):
-        """Startup should not load disabled standalone skills into prompt context."""
+        """enabled_skills filters standalone skills; provider skills always load."""
         import importlib
 
         import app.atlasclaw.core.config as config_module
@@ -166,8 +166,10 @@ class TestMainStartup:
                 }
                 loaded_names = {entry["name"] for entry in md_skills.values()}
 
+                # Provider skills load from ALL provider dirs (hot-update safe)
                 assert "smartcmp:request" in md_skills
-                assert "jira:jira-issue" not in md_skills
+                assert "jira:jira-issue" in md_skills  # loaded even without instance
+                # Standalone skills filtered by enabled_skills config
                 assert "github" in loaded_names
                 assert "pptx" not in loaded_names
         finally:

@@ -60,9 +60,9 @@ describe('role management page', () => {
           status: 200,
           json: () => Promise.resolve({
             skills: [
-              { name: 'jira-manager', description: 'Jira integration', runtime_enabled: true },
-              { name: 'confluence', description: 'Confluence integration', runtime_enabled: true },
-              { name: 'pdf', description: 'PDF helper', runtime_enabled: false }
+              { name: 'jira-manager', description: 'Jira integration', runtime_enabled: true, type: 'executable' },
+              { name: 'confluence', description: 'Confluence integration', runtime_enabled: true, type: 'executable' },
+              { name: 'pdf', description: 'PDF helper', runtime_enabled: false, type: 'markdown' }
             ]
           })
         })
@@ -182,8 +182,9 @@ describe('role management page', () => {
     expect(container.querySelectorAll('#roleEditor .role-permission-grid-skills .role-permission-card')).toHaveLength(1)
     expect(container.querySelector('#roleEditor [data-skill-master-toggle="enabled"]')).not.toBeNull()
     expect(container.querySelector('#roleEditor [data-skill-toggle="authorized"]')).toBeNull()
-    expect(container.querySelector('#roleEditor [data-skill-master-toggle="enabled"]').disabled).toBe(true)
-    expect(container.querySelector('#roleEditor #saveRoleChanges').disabled).toBe(true)
+    // Admin CAN manage skills module -- master toggle and save button are enabled
+    expect(container.querySelector('#roleEditor [data-skill-master-toggle="enabled"]').disabled).toBe(false)
+    expect(container.querySelector('#roleEditor #saveRoleChanges').disabled).toBe(false)
   })
 
   test('builtin admin defaults all live skills to enabled when no explicit list is stored', async () => {
@@ -202,22 +203,24 @@ describe('role management page', () => {
     expect(skillsSummary.textContent.trim()).toBe('3 enabled')
   })
 
-  test('builtin admin permissions are read-only and do not submit updates', async () => {
+  test('builtin admin skills master toggle is enabled and save is allowed', async () => {
     const page = await import('../../app/frontend/scripts/pages/role-management.js')
     const container = document.getElementById('page-root')
 
     await page.mount(container)
 
+    // Admin can manage skills module, so master toggle is interactive
     const masterToggle = container.querySelector('[data-skill-master-toggle="enabled"]')
-    expect(masterToggle.disabled).toBe(true)
+    expect(masterToggle.disabled).toBe(false)
 
+    // Clicking save for admin should trigger a PUT (admin CAN save skill permissions)
     container.querySelector('#saveRoleChanges').click()
     await new Promise(resolve => setTimeout(resolve, 0))
 
     const putCall = global.fetch.mock.calls.find(([url, options]) => (
-      url === '/api/roles/role-admin' && options.method === 'PUT'
+      url === '/api/roles/role-admin' && options?.method === 'PUT'
     ))
-    expect(putCall).toBeUndefined()
+    expect(putCall).toBeDefined()
   })
 
   test('existing custom roles keep identifier read-only', async () => {
