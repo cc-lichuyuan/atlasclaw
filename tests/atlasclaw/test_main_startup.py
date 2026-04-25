@@ -274,7 +274,12 @@ class TestMainStartup:
 
     @pytest.mark.asyncio
     async def test_builtin_role_skill_permission_bootstrap_seeds_admin_and_user(self, tmp_path):
-        """Startup bootstrap should seed system-managed admin and user role skills."""
+        """Startup bootstrap should seed system-managed admin and user role skills.
+
+        Admin receives the full catalog (built-in + provider).
+        User receives only provider-originated skills.
+        Viewer remains untouched (empty skill_permissions).
+        """
         import importlib
 
         from app.atlasclaw.db.database import DatabaseConfig, init_database
@@ -289,15 +294,29 @@ class TestMainStartup:
         )
         await manager.create_tables()
 
+        BUILTIN_TOOL_NAME = "exec"
+
         class _FakeRegistry:
             def tools_snapshot(self):
-                return [
+                # Provider tools (SmartCMP)
+                provider_tools = [
                     {
                         "name": tool_name,
                         "description": f"{tool_name} description",
+                        "source": "provider",
+                        "provider_type": "smartcmp",
                     }
                     for tool_name in SMARTCMP_REQUEST_TOOL_NAMES
                 ]
+                # Built-in tool (high-privilege)
+                builtin_tools = [
+                    {
+                        "name": BUILTIN_TOOL_NAME,
+                        "description": "Execute shell command",
+                        "source": "builtin",
+                    },
+                ]
+                return provider_tools + builtin_tools
 
             def md_snapshot(self):
                 return [
@@ -305,6 +324,8 @@ class TestMainStartup:
                         "name": "request",
                         "qualified_name": SMARTCMP_REQUEST_SKILL_ID,
                         "description": "SmartCMP request helper",
+                        "provider": "smartcmp",
+                        "location": "provider",
                     },
                 ]
 
@@ -316,14 +337,25 @@ class TestMainStartup:
                 user_role = await RoleService.get_by_identifier(session, "user")
                 viewer_role = await RoleService.get_by_identifier(session, "viewer")
 
-            expected_ids = {SMARTCMP_REQUEST_SKILL_ID, *SMARTCMP_REQUEST_TOOL_NAMES}
-            for role in (admin_role, user_role):
-                skill_ids = {
-                    entry["skill_id"]
-                    for entry in role.permissions["skills"]["skill_permissions"]
-                }
-                assert expected_ids.issubset(skill_ids)
+            provider_ids = {SMARTCMP_REQUEST_SKILL_ID, *SMARTCMP_REQUEST_TOOL_NAMES}
 
+            # Admin should have ALL skills (provider + built-in)
+            admin_skill_ids = {
+                entry["skill_id"]
+                for entry in admin_role.permissions["skills"]["skill_permissions"]
+            }
+            assert provider_ids.issubset(admin_skill_ids)
+            assert BUILTIN_TOOL_NAME in admin_skill_ids
+
+            # User should only have PROVIDER skills, not built-in
+            user_skill_ids = {
+                entry["skill_id"]
+                for entry in user_role.permissions["skills"]["skill_permissions"]
+            }
+            assert provider_ids.issubset(user_skill_ids)
+            assert BUILTIN_TOOL_NAME not in user_skill_ids
+
+            # Viewer remains untouched
             assert viewer_role.permissions["skills"]["skill_permissions"] == []
         finally:
             await manager.close()

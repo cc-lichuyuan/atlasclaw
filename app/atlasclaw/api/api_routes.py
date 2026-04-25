@@ -969,16 +969,14 @@ async def update_role(
     if "permissions" in role_data.model_fields_set:
         if old_role.is_builtin and is_system_managed_builtin_role(old_role.identifier):
             # System-managed built-in role (admin, user): allow skills permission
-            # changes only. Reject attempts to modify any other permission module.
-            old_perms = RoleService.normalize_permissions(old_role.permissions)
-            new_perms = RoleService.normalize_permissions(role_data.permissions)
-            changed_modules = sorted({
-                module_id
-                for module_id in set(old_perms.keys()) | set(new_perms.keys())
-                if old_perms.get(module_id) != new_perms.get(module_id)
-            })
-            disallowed_modules = [module_id for module_id in changed_modules if module_id != "skills"]
-            if disallowed_modules:
+            # changes only.  Reject if the client explicitly submitted any
+            # non-skills module in the payload (before normalization fills in
+            # defaults for missing keys).
+            raw_submitted = role_data.permissions or {}
+            explicitly_submitted_non_skills = sorted(
+                k for k in raw_submitted.keys() if k != "skills"
+            )
+            if explicitly_submitted_non_skills:
                 raise HTTPException(
                     status_code=400,
                     detail=(
@@ -986,7 +984,10 @@ async def update_role(
                         "outside the skills module"
                     ),
                 )
-            # Preserve existing non-skills modules unchanged
+            # Normalize and force-restore non-skills modules from the existing
+            # record so that partial updates never overwrite protected modules.
+            old_perms = RoleService.normalize_permissions(old_role.permissions)
+            new_perms = RoleService.normalize_permissions(role_data.permissions)
             for module_id in list(new_perms.keys()):
                 if module_id != "skills":
                     new_perms[module_id] = old_perms.get(module_id, new_perms[module_id])

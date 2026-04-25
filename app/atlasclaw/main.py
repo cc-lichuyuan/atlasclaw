@@ -197,17 +197,23 @@ async def _collect_runtime_user_ids(
         if user_id and user_id not in {"default", "anonymous"}
     )
 
+# Roles in this set receive the FULL skill catalog (built-in + provider +
+# standalone).  All other system-managed roles only receive provider skills.
+_FULL_CATALOG_ROLE_IDENTIFIERS = frozenset({"admin"})
+
+
 async def _ensure_builtin_role_skill_permissions(skill_registry) -> None:
     """Seed / incrementally merge skill_permissions for system-managed
-    built-in roles (admin AND user) from the *complete* skill catalog.
+    built-in roles from the skill catalog.
 
-    The catalog includes both built-in executable tools (tools_snapshot) and
-    markdown skills (md_snapshot).  System-managed roles should default to
-    all-enabled so that a freshly initialized system does not lose any
-    built-in capability.
+    - **admin** receives the *complete* catalog (built-in tools, provider
+      skills, standalone skills) so it never loses any capability.
+    - **user** receives *only* provider-originated skills so that high-
+      privilege built-in tools (exec, fs, browser, web_search …) are not
+      granted by default.
 
     Behaviour:
-      - Fresh install (no stored permissions): write the full catalog.
+      - Fresh install (no stored permissions): write the role-appropriate catalog.
       - Upgrade (existing permissions): append any NEW skills that are in the
         catalog but missing from stored permissions.  Existing user choices
         (enabled/disabled) are preserved.
@@ -233,50 +239,77 @@ async def _ensure_builtin_role_skill_permissions(skill_registry) -> None:
             if not managed_roles:
                 return
 
-            # ---- Build full catalog entries (shared across roles) ----
-            seen_ids: set[str] = set()
-            catalog_entries: list[dict] = []
-
-            # 1. Built-in executable tools (from tools_snapshot)
+            # ---- Build catalog entries ----
             tools_snap = skill_registry.tools_snapshot()
-            for tool in tools_snap:
-                tool_name = str(tool.get("name", "") or "").strip()
-                if not tool_name or tool_name in seen_ids:
-                    continue
-                seen_ids.add(tool_name)
-                catalog_entries.append({
-                    "skill_id": tool_name,
-                    "skill_name": tool_name,
-                    "description": tool.get("description", ""),
+            md_skills = skill_registry.md_snapshot()
+
+            def _make_entry(skill_id: str, skill_name: str, description: str) -> dict:
+                return {
+                    "skill_id": skill_id,
+                    "skill_name": skill_name,
+                    "description": description,
                     "runtime_enabled": True,
                     "authorized": True,
                     "enabled": True,
-                })
+                }
 
-            # 2. Markdown skills (from md_snapshot)
-            md_skills = skill_registry.md_snapshot()
+            # Full catalog: every tool + every md skill (for admin).
+            full_catalog: list[dict] = []
+            full_seen: set[str] = set()
+            for tool in tools_snap:
+                tool_name = str(tool.get("name", "") or "").strip()
+                if not tool_name or tool_name in full_seen:
+                    continue
+                full_seen.add(tool_name)
+                full_catalog.append(_make_entry(tool_name, tool_name, tool.get("description", "")))
             for md in md_skills:
                 md_name = str(md.get("name", "") or "").strip()
                 md_qname = str(md.get("qualified_name", "") or "").strip()
                 skill_id = md_qname or md_name
-                if not skill_id or skill_id in seen_ids:
+                if not skill_id or skill_id in full_seen:
                     continue
-                seen_ids.add(skill_id)
-                catalog_entries.append({
-                    "skill_id": skill_id,
-                    "skill_name": md_name,
-                    "description": md.get("description", ""),
-                    "runtime_enabled": True,
-                    "authorized": True,
-                    "enabled": True,
-                })
+                full_seen.add(skill_id)
+                full_catalog.append(_make_entry(skill_id, md_name, md.get("description", "")))
 
-            if not catalog_entries:
+            # Provider-only catalog: provider executable tools + provider md
+            # skills (for non-admin system-managed roles like user).
+            provider_catalog: list[dict] = []
+            provider_seen: set[str] = set()
+            for tool in tools_snap:
+                if str(tool.get("source", "")).strip().lower() != "provider":
+                    continue
+                tool_name = str(tool.get("name", "") or "").strip()
+                if not tool_name or tool_name in provider_seen:
+                    continue
+                provider_seen.add(tool_name)
+                provider_catalog.append(_make_entry(tool_name, tool_name, tool.get("description", "")))
+            for md in md_skills:
+                if not str(md.get("provider", "")).strip():
+                    continue
+                md_name = str(md.get("name", "") or "").strip()
+                md_qname = str(md.get("qualified_name", "") or "").strip()
+                skill_id = md_qname or md_name
+                if not skill_id or skill_id in provider_seen:
+                    continue
+                provider_seen.add(skill_id)
+                provider_catalog.append(_make_entry(skill_id, md_name, md.get("description", "")))
+
+            if not full_catalog:
                 return
 
             # ---- Per-role incremental merge ----
             changed = False
             for role in managed_roles:
+                # Admin gets the full catalog; other system-managed roles
+                # (e.g. user) only receive provider-originated skills.
+                catalog_entries = (
+                    full_catalog
+                    if role.identifier in _FULL_CATALOG_ROLE_IDENTIFIERS
+                    else provider_catalog
+                )
+                if not catalog_entries:
+                    continue
+
                 perms = role.permissions or {}
                 existing_perms: list[dict] = (
                     (perms.get("skills") or {}).get("skill_permissions", [])
